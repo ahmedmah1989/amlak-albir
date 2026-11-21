@@ -144,11 +144,19 @@ export function driver(org: string = currentOrg()): Promise<Driver> {
       }
       const d = await makeDriver(org);
       if (org === PLATFORM) { await d.exec(PLATFORM_SCHEMA); await d.q(`insert into settings values ('session_secret',$1) on conflict do nothing`, [randomBytes(32).toString('hex')]); return d; }
-      await d.exec(SCHEMA);
-      if (org === MAIN) await seedIfEmpty(d);
-      else await d.q(`insert into settings values ('session_secret',$1),('org',$2),('opening_date',$3),('grace_days','10') on conflict do nothing`, [randomBytes(32).toString('hex'), org, new Date().toISOString().slice(0, 10)]);
-      for (const [k, v] of DEFAULT_SETTINGS) await d.q('insert into settings values ($1,$2) on conflict do nothing', [k, v]);
-      if (org === MAIN) await runMigrations09(d.q, d.tx);
+      // Hosted lambdas are cold per request: running the full idempotent DDL batch every cold start
+      // (~40 tables + migrations) pushes first requests past the function timeout. A settings sentinel
+      // makes init one cheap query once the schema is in place. Bump SCHEMA_V when the schema changes.
+      const SCHEMA_V = '2026-11-22a';
+      const [sv] = await d.q(`select value from settings where key='schema_v'`).catch(() => [] as Row[]);
+      if (sv?.value !== SCHEMA_V) {
+        await d.exec(SCHEMA);
+        if (org === MAIN) await seedIfEmpty(d);
+        else await d.q(`insert into settings values ('session_secret',$1),('org',$2),('opening_date',$3),('grace_days','10') on conflict do nothing`, [randomBytes(32).toString('hex'), org, new Date().toISOString().slice(0, 10)]);
+        for (const [k, v] of DEFAULT_SETTINGS) await d.q('insert into settings values ($1,$2) on conflict do nothing', [k, v]);
+        if (org === MAIN) await runMigrations09(d.q, d.tx);
+        await d.q(`insert into settings values ('schema_v',$1) on conflict (key) do update set value=$1`, [SCHEMA_V]);
+      }
       if (d.kind === 'pglite' || process.env.AUTO_BACKUP === '1') startAutoBackup();
       return d;
     })();
