@@ -42,6 +42,7 @@ interface Driver { kind: 'postgres' | 'pglite'; q: Q; exec: (sql: string) => Pro
 
 async function makeDriver(org: string): Promise<Driver> {
   const url = process.env.DATABASE_URL;
+  if (!url && (process.env.NETLIFY || process.env.VERCEL)) throw new Error('DATABASE_URL is required on hosted deployments');
   if (url) {
     const postgres = (await import('postgres')).default;
     const schema = org === MAIN ? 'public' : org === PLATFORM ? 'platform' : 'org_' + org.replace(/-/g, '_');
