@@ -12,8 +12,4 @@ export function middleware(req: NextRequest) {
   headers.set('x-amlak-org', portalOrg || req.cookies.get('amlak_org')?.value || '');
   return NextResponse.next({ request: { headers } });
 }
-// Server actions (POST + next-action header) skip middleware entirely: the Netlify edge
-// (Deno) middleware aborts the request signal when its response finishes, which kills the
-// RSC action stream with "Connection closed" before the action responds. Every protected
-// action calls requireUser() server-side, so skipping middleware here loses no auth check.
-export const config = { matcher: [{ source: '/((?!_next|favicon).*)', missing: [{ type: 'header' as const, key: 'next-action' }] }] };
+export const config = { matcher: ['/((?!_next|favicon).*)'] };
