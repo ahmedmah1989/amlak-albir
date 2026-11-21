@@ -19,9 +19,11 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.16.8",
     "@types/node": "20.14.10",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
+    "netlify-cli": "^27.20.1",
     "typescript": "5.5.4"
   }
 }
