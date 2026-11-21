@@ -12,4 +12,7 @@ export function middleware(req: NextRequest) {
   headers.set('x-amlak-org', portalOrg || req.cookies.get('amlak_org')?.value || '');
   return NextResponse.next({ request: { headers } });
 }
-export const config = { matcher: ['/((?!_next|favicon).*)'] };
+// Server actions (POST + next-action header) skip middleware entirely: the Netlify edge
+// (Deno) middleware proxy holds the action's RSC response stream open until the 30s function
+// kill. Every protected action calls requireUser() server-side, so auth is unaffected.
+export const config = { matcher: [{ source: '/((?!_next|favicon).*)', missing: [{ type: 'header' as const, key: 'next-action' }] }] };
