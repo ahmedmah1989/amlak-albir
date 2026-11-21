@@ -82,6 +82,13 @@ async function insertMany(q: Q, table: string, rows: Row[], cols: string[]) {
   }
 }
 
+function adminPassword(): string {
+  const p = process.env.ADMIN_PASSWORD;
+  if (p) return p;
+  if (process.env.DATABASE_URL) throw new Error('ADMIN_PASSWORD is required in cloud mode');
+  return 'admin123'; // local PGlite dev convenience only
+}
+
 async function seedIfEmpty(d: Driver) {
   const [{ n }] = await d.q('select count(*)::int as n from properties');
   if (n > 0) return;
@@ -91,7 +98,7 @@ async function seedIfEmpty(d: Driver) {
       ['receipt_prefix', 'R'], ['receipt_seq', '0'], ['session_secret', randomBytes(32).toString('hex')]];
     for (const [k, v] of settings) await q('insert into settings values ($1,$2) on conflict do nothing', [k, v]);
     await q(`insert into users (id,username,full_name,role,pass_hash,must_change) values ('u-admin','admin','مدير النظام','admin',$1,true) on conflict do nothing`,
-      [hashPassword(process.env.ADMIN_PASSWORD || 'admin123')]);
+      [hashPassword(adminPassword())]);
     const ins = async (t: string, rows: any[], cols: string[]) => { if (rows?.length) await insertMany(q, t, rows, cols); };
     await ins('properties', s.properties, ['id', 'name', 'short', 'type', 'location', 'ownership', 'land_value', 'building_value', 'value_status', 'deed_no', 'notes', 'ground_lease_end']);
     await ins('units', s.units, ['id', 'property_id', 'code', 'kind', 'unit_type', 'floor', 'rooms', 'occupant', 'monthly_rent', 'note']);
@@ -104,7 +111,7 @@ async function seedIfEmpty(d: Driver) {
     await ins('adjustments', s.adjustments, ['id', 'tenant_id', 'property_id', 'installment_no', 'type', 'amount', 'approved_by', 'decision_no']);
     await ins('audit_notes', s.audit_notes, ['id', 'category', 'property_id', 'tenant_name', 'unit', 'amount', 'ref', 'ref_date', 'source', 'details', 'status']);
     await ins('exceptions', s.exceptions, ['id', 'rule', 'scope', 'entity_id', 'property_id', 'before_date', 'reason', 'requested_by', 'approved_by', 'status', 'expires_on']);
-    await q(`insert into activity_log (username,action,details) values ('النظام','تهيئة','تحميل بيانات عمارة صلة الفقيد من ملف متابعة الإيجارات')`);
+    await q(`insert into activity_log (username,action,details) values ('النظام','تهيئة','تحميل البيانات الأولية')`);
   });
 }
 
