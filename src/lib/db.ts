@@ -57,7 +57,18 @@ async function makeDriver(org: string): Promise<Driver> {
         bigint: { to: 20, from: [20], serialize: (x: unknown) => String(x), parse: (x: string) => Number(x) },
       } as any,
     });
-    const q: Q = async (s, p = []) => [...(await sql.unsafe(s, p as any[]))] as Row[];
+    // Serverless settle-guarantee: a query stuck in the pooler queue (or canceled server-side)
+    // can leave postgres.js's promise pending forever; the platform then holds the buffered
+    // response until the 30s kill. Query.cancel() is the supported teardown: queued queries
+    // reject immediately, active ones receive a server CancelRequest; either way the promise
+    // settles and the socket is freed. Label is keyword:table only - never SQL text or values.
+    const labelOf = (s: string) => { const m = s.trim().toLowerCase().match(/^(\w+)[\s\S]*?(?:from|into|update)\s+([a-z_][a-z0-9_]*)/); return m ? m[1] + ':' + m[2] : s.trim().slice(0, 12).replace(/[^a-z]/gi, ''); };
+    const q: Q = async (s, p = []) => {
+      const query = sql.unsafe(s, p as any[]);
+      const timer = setTimeout(() => { console.log('[db-timeout]', labelOf(s)); try { (query as any).cancel?.(); } catch {} }, 12000);
+      timer.unref?.();
+      try { return [...(await query)] as Row[]; } finally { clearTimeout(timer); }
+    };
     return {
       kind: 'postgres', q,
       exec: async (s) => { await sql.unsafe(s); },
