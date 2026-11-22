@@ -48,9 +48,8 @@ async function makeDriver(org: string): Promise<Driver> {
     const schema = org === MAIN ? 'public' : org === PLATFORM ? 'platform' : 'org_' + org.replace(/-/g, '_');
     if (schema !== 'public') { const boot = postgres(url, { max: 1, onnotice: () => {} }); await boot.unsafe(`create schema if not exists ${schema}`); await boot.end(); }
     const sql = postgres(url, {
-      prepare: false, // serverless + transaction pooler: ONE connection per lambda - the pooler wedged
-      // after the first statement per connection (first max queries completed, every queued query
-      // hung until the 30s kill). max:1 serializes through a single socket and minimizes pool slots.
+      prepare: false, // one socket per lambda: minimal pooler slots, and max:1 is the driver's
+      // supported config for sql.begin transactions. Serialization itself is the chain below.
       max: 1, connection: { search_path: schema } as any, // serverless: short idle timeout lets the lambda event loop drain right after the response;
       // a 20s idle socket held invocations open until the 30s platform kill, delaying the response.
       idle_timeout: 1, onnotice: () => {},
@@ -60,22 +59,38 @@ async function makeDriver(org: string): Promise<Driver> {
         bigint: { to: 20, from: [20], serialize: (x: unknown) => String(x), parse: (x: string) => Number(x) },
       } as any,
     });
-    // Serverless settle-guarantee: a query stuck in the pooler queue (or canceled server-side)
-    // can leave postgres.js's promise pending forever; the platform then holds the buffered
-    // response until the 30s kill. Query.cancel() is the supported teardown: queued queries
-    // reject immediately, active ones receive a server CancelRequest; either way the promise
-    // settles and the socket is freed. Label is keyword:table only - never SQL text or values.
-    const labelOf = (s: string) => { const m = s.trim().toLowerCase().match(/^(\w+)[\s\S]*?(?:from|into|update)\s+([a-z_][a-z0-9_]*)/); return m ? m[1] + ':' + m[2] : s.trim().slice(0, 12).replace(/[^a-z]/gi, ''); };
-    const q: Q = async (s, p = []) => {
-      const query = sql.unsafe(s, p as any[]);
-      const timer = setTimeout(() => { console.log('[db-timeout]', labelOf(s)); try { (query as any).cancel?.(); } catch {} }, 12000);
-      timer.unref?.();
-      try { return [...(await query)] as Row[]; } finally { clearTimeout(timer); }
+    // Transaction-pooler compatibility (source-grounded): postgres.js execute() writes EVERY
+    // queued query to the socket immediately - pipelining (postgres/src/connection.js) - and
+    // the Supabase shared pooler in transaction mode hangs on pipelined traffic, documented at
+    // supabase.com/docs/guides/database/postgres-js ("can hang queries or return mismatched
+    // rows"); max_pipeline: 0 is broken upstream (breaks sql.begin). Observed on this deploy:
+    // the first query per connection completed, every query behind it hung until the 30s kill.
+    // So EVERY statement - plain, exec and transactions - goes through ONE promise chain per
+    // driver: a single query is ever on the wire, which the pooler serves request-response.
+    // Deadlock audit: every tx callback and helper uses the callback-scoped Q (t: Q); nothing
+    // calls module-level q/tx inside a tx callback, which would deadlock this chain by design.
+    let chain: Promise<unknown> = Promise.resolve();
+    const enqueue = <T,>(fn: () => Promise<T>): Promise<T> => {
+      const run = chain.then(fn);
+      chain = run.then(() => undefined, () => undefined); // chain survives rejections
+      return run;
     };
+    // Settle-guarantee backstop: a query stuck in the pooler (or canceled server-side) can
+    // leave postgres.js's promise pending forever; the platform then holds the buffered
+    // response until the 30s kill. Query.cancel() is the supported teardown: queued queries
+    // reject immediately, active ones receive a server CancelRequest. Labels are
+    // keyword:table only - never SQL text or values.
+    const labelOf = (s: string) => { const m = s.trim().toLowerCase().match(/^(\w+)[\s\S]*?(?:from|into|update)\s+([a-z_][a-z0-9_]*)/); return m ? m[1] + ':' + m[2] : s.trim().slice(0, 12).replace(/[^a-z]/gi, ''); };
+    const guard = async (query: any, label: string): Promise<any> => {
+      const timer = setTimeout(() => { console.log('[db-timeout]', label); try { query.cancel?.(); } catch {} }, 12000);
+      timer.unref?.();
+      try { return await query; } finally { clearTimeout(timer); }
+    };
+    const q: Q = (s, p = []) => enqueue(async () => [...(await guard(sql.unsafe(s, p as any[]) as any, labelOf(s)))] as Row[]);
     return {
       kind: 'postgres', q,
-      exec: async (s) => { await sql.unsafe(s); },
-      tx: (fn) => sql.begin((t: any) => fn(async (s, p = []) => [...(await t.unsafe(s, p))])) as any,
+      exec: (s) => enqueue(async () => { await sql.unsafe(s); }),
+      tx: (fn) => enqueue(() => sql.begin((t: any) => fn(async (s, p = []) => [...(await guard(t.unsafe(s, p) as any, 'tx:' + labelOf(s)))]))) as any,
     };
   }
   const { PGlite } = await import('@electric-sql/pglite');
