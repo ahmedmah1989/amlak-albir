@@ -31,6 +31,12 @@ async function tickOrg() {
 }
 export function ensureScheduler() {
   if (G.__amlakSched || process.env.AMLAK_NO_SCHEDULER === '1') return;
+  // Serverless (Netlify/Vercel/AWS Lambda): in-process timers keep the invocation's event loop
+  // alive, and the platform holds the buffered response until the loop drains or the 30s kill -
+  // observed as a 30s hang on every authed page (the shared layout calls this). Scheduled work
+  // on serverless belongs to cron routes (e.g. /api/cron/backup), not in-request timers.
+  if (process.env.NETLIFY || process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) return;
   G.__amlakSched = setInterval(() => { void tick(); }, 10 * 60 * 1000);
-  setTimeout(() => { void tick(); }, 15000);
+  G.__amlakSched.unref?.();
+  setTimeout(() => { void tick(); }, 15000).unref?.();
 }
