@@ -38,7 +38,7 @@ export function currentOrg(): string {
 
 export type Row = Record<string, any>;
 export type Q = (sql: string, params?: unknown[]) => Promise<Row[]>;
-interface Driver { kind: 'postgres' | 'pglite'; q: Q; exec: (sql: string) => Promise<void>; tx: <T>(fn: (q: Q) => Promise<T>) => Promise<T> }
+interface Driver { kind: 'postgres' | 'pglite'; q: Q; qAll: (stmts: { s: string; p?: unknown[] }[]) => Promise<Row[][]>; exec: (sql: string) => Promise<void>; tx: <T>(fn: (q: Q) => Promise<T>) => Promise<T> }
 
 async function makeDriver(org: string): Promise<Driver> {
   const url = process.env.DATABASE_URL;
@@ -87,8 +87,18 @@ async function makeDriver(org: string): Promise<Driver> {
       try { return await query; } finally { clearTimeout(timer); }
     };
     const q: Q = (s, p = []) => enqueue(async () => [...(await guard(sql.unsafe(s, p as any[]) as any, labelOf(s)))] as Row[]);
+    // One round trip for many statements: simple protocol carries multiple statements in a
+    // single message; connection.js accumulates one Result per statement and resolves the
+    // array (no pipelining - sequential within one request, which the pooler serves fine).
+    // The simple protocol takes no bind parameters, so values are inlined with escaping.
+    const esc = (v: unknown) => v === null || v === undefined ? 'null' : typeof v === 'number' ? String(v) : "'" + String(v).replace(/'/g, "''") + "'";
+    const qAll = (stmts: { s: string; p?: unknown[] }[]) => enqueue(async () => {
+      const combined = stmts.map(({ s, p = [] }) => s.replace(/\$(\d+)/g, (_, n) => esc(p[Number(n) - 1]))).join(';\n');
+      const res = await guard(sql.unsafe(combined).simple() as any, 'batch:' + stmts.length);
+      return (stmts.length === 1 ? [res] : res) as Row[][];
+    });
     return {
-      kind: 'postgres', q,
+      kind: 'postgres', q, qAll,
       exec: (s) => enqueue(async () => { await sql.unsafe(s); }),
       tx: (fn) => enqueue(() => sql.begin((t: any) => fn(async (s, p = []) => [...(await guard(t.unsafe(s, p) as any, 'tx:' + labelOf(s)))]))) as any,
     };
@@ -101,6 +111,7 @@ async function makeDriver(org: string): Promise<Driver> {
   const q: Q = async (s, p = []) => (await db.query<Row>(s, p as any[])).rows;
   return {
     kind: 'pglite', q,
+    qAll: async (stmts) => { const out: Row[][] = []; for (const { s, p = [] } of stmts) out.push((await db.query<Row>(s, p as any[])).rows); return out; },
     exec: async (s) => { await db.exec(s); },
     tx: (fn) => db.transaction((t) => fn(async (s, p = []) => (await t.query<Row>(s, p as any[])).rows)),
   };
@@ -197,6 +208,7 @@ export function driver(org: string = currentOrg()): Promise<Driver> {
   return d;
 }
 export const q: Q = async (s, p) => (await driver()).q(s, p);
+export const qAll = async (stmts: { s: string; p?: unknown[] }[]) => (await driver()).qAll(stmts);
 export const tx = async <T,>(fn: (q: Q) => Promise<T>) => (await driver()).tx(fn);
 /** استعلام على سجل الجهات (لوحة المالك) */
 export const pq: Q = async (s, p) => (await driver(PLATFORM)).q(s, p);
