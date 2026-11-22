@@ -48,7 +48,10 @@ async function makeDriver(org: string): Promise<Driver> {
     const schema = org === MAIN ? 'public' : org === PLATFORM ? 'platform' : 'org_' + org.replace(/-/g, '_');
     if (schema !== 'public') { const boot = postgres(url, { max: 1, onnotice: () => {} }); await boot.unsafe(`create schema if not exists ${schema}`); await boot.end(); }
     const sql = postgres(url, {
-      prepare: false, max: org === MAIN ? 5 : 2, connection: { search_path: schema } as any, // serverless: short idle timeout lets the lambda event loop drain right after the response;
+      prepare: false, // serverless + transaction pooler: ONE connection per lambda - the pooler wedged
+      // after the first statement per connection (first max queries completed, every queued query
+      // hung until the 30s kill). max:1 serializes through a single socket and minimizes pool slots.
+      max: 1, connection: { search_path: schema } as any, // serverless: short idle timeout lets the lambda event loop drain right after the response;
       // a 20s idle socket held invocations open until the 30s platform kill, delaying the response.
       idle_timeout: 1, onnotice: () => {},
       types: {
