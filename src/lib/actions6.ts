@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { todayRiyadh, getSettings } from './data';
 import { assertOpenPeriod } from './guard';
 import { parseFeatures } from './features';
@@ -19,7 +19,7 @@ const feats = async () => parseFeatures((await getSettings()).features);
 
 // ---------- مراجعة سندات القبض (الرقابة المزدوجة) ----------
 export async function reviewPayment(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!, back_ = s(fd, 'back') || `/payments/${id}`;
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!, back_ = s(fd, 'back') || `/payments/${id}`;
   const [p] = await q('select * from payments where id=$1', [id]); if (!p) back('/payments', 'السند غير موجود');
   if (p.voided) back(back_, 'السند ملغى');
   if (p.reviewed_by) back(back_, 'تمت مراجعة السند من قبل');
@@ -29,7 +29,7 @@ export async function reviewPayment(fd: FormData) {
   done(back_, `تمت مراجعة السند ${p.receipt_no}`);
 }
 export async function reviewPayments(fd: FormData) {
-  const u = await requireUser('accountant'); const ids = String(fd.get('ids') ?? '').split(',').filter(Boolean);
+  const u = await requireAction('accountant'); const ids = String(fd.get('ids') ?? '').split(',').filter(Boolean);
   let ok = 0, skip = 0;
   for (const id of ids.slice(0, 200)) {
     const [p] = await q('select * from payments where id=$1', [id]);
@@ -42,7 +42,7 @@ export async function reviewPayments(fd: FormData) {
 
 // ---------- إقفال الفترة ----------
 export async function closePeriod(fd: FormData) {
-  const u = await requireUser('admin'); const until = s(fd, 'until');
+  const u = await requireAction('admin'); const until = s(fd, 'until');
   if (!isDate(until) || until! >= todayRiyadh()) back('/approvals', 'تاريخ الإقفال يجب أن يكون قبل اليوم');
   const [cur] = await q(`select value from settings where key='locked_until'`);
   if (cur?.value && until! < cur.value && fd.get('confirm_reopen') !== '1') back('/approvals', `الفترة مقفلة حتى ${cur.value}. لإعادة فتح جزء منها أكّد إعادة الفتح`);
@@ -57,7 +57,7 @@ export async function closePeriod(fd: FormData) {
 
 // ---------- سندات الصرف ----------
 export async function createVoucher(fd: FormData) {
-  const u = await requireUser('accountant'); const path = '/vouchers/new' + (s(fd, 'contract_id') ? `?contract=${s(fd, 'contract_id')}` : '');
+  const u = await requireAction('accountant'); const path = '/vouchers/new' + (s(fd, 'contract_id') ? `?contract=${s(fd, 'contract_id')}` : '');
   const date = s(fd, 'date'), amt = n(fd, 'amount'), kind = s(fd, 'kind') ?? 'other', method = s(fd, 'method') ?? 'تحويل بنكي';
   let payee = s(fd, 'payee'); const tenant = s(fd, 'tenant_id'), contract = s(fd, 'contract_id');
   if (!isDate(date) || date! > todayRiyadh()) back(path, 'تاريخ السند غير صحيح');
@@ -87,7 +87,7 @@ export async function createVoucher(fd: FormData) {
   done(`/vouchers/${id}`, `أُنشئ سند الصرف ${no} وينتظر الاعتماد`);
 }
 export async function approveVoucher(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!;
   const [v] = await q('select * from vouchers where id=$1', [id]); if (!v) back('/vouchers', 'السند غير موجود');
   if (v.status !== 'pending') back(`/vouchers/${id}`, 'السند ليس بانتظار الاعتماد');
   if ((await feats()).maker_checker && v.created_by === u.full_name) back(`/vouchers/${id}`, 'لا يعتمد السند من أنشأه؛ يلزم مستخدم آخر');
@@ -97,7 +97,7 @@ export async function approveVoucher(fd: FormData) {
   done(`/vouchers/${id}`, `اعتُمد سند الصرف ${v.voucher_no}`);
 }
 export async function voidVoucher(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason');
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason');
   const [v] = await q('select * from vouchers where id=$1', [id]); if (!v) back('/vouchers', 'السند غير موجود');
   if (!reason) back(`/vouchers/${id}`, 'سبب الإلغاء مطلوب');
   if (v.status === 'voided') back(`/vouchers/${id}`, 'السند ملغى من قبل');

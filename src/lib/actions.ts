@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid, pq, runAs, currentOrg, validSlug, MULTI, MAIN, type Q } from './db';
 import { cookies } from 'next/headers';
-import { requireUser, createSession, destroySession, log, orgState, type User } from './auth';
+import { requireUser, requireAction, createSession, destroySession, log, orgState, type User } from './auth';
 import { hashPassword, verifyPassword } from './password';
 import { buildSchedule, addDays, addMonths } from './calc';
 import { todayRiyadh } from './data';
@@ -72,6 +72,7 @@ export async function chooseOrg(fd: FormData) {
 }
 export async function logout() { destroySession(); redirect('/login'); }
 export async function changePassword(fd: FormData) {
+  // exempt from the must_change wall: this IS the way out (requireAction would loop)
   const u = await requireUser();
   const cur = s(fd, 'current'), nw = s(fd, 'new'), cf = s(fd, 'confirm');
   const [row] = await q('select pass_hash from users where id=$1', [u.id]);
@@ -85,7 +86,7 @@ export async function changePassword(fd: FormData) {
 
 // ---------- العقارات والوحدات ----------
 export async function saveProperty(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id');
+  const u = await requireAction('admin'); const id = s(fd, 'id');
   const name = s(fd, 'name'), short = s(fd, 'short') ?? name;
   if (!name) back(id ? `/properties/${id}/edit` : '/properties/new', 'اسم العقار مطلوب');
   const v = [name, short, s(fd, 'type'), s(fd, 'location'), s(fd, 'ownership'), n(fd, 'land_value'), n(fd, 'building_value'), s(fd, 'value_status'), s(fd, 'deed_no'), s(fd, 'notes') ?? '', s(fd, 'ground_lease_end')];
@@ -111,7 +112,7 @@ export async function saveProperty(fd: FormData) {
   await log(u, 'إضافة عقار', 'property', nid, name!); done(`/properties/${nid}`, 'تمت إضافة العقار');
 }
 export async function saveUnit(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id')!, code = s(fd, 'code');
+  const u = await requireAction('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id')!, code = s(fd, 'code');
   if (!code) back(`/properties/${pid}`, 'رقم/اسم الوحدة مطلوب');
   const v = [code, s(fd, 'kind') ?? 'lease', s(fd, 'unit_type'), s(fd, 'floor'), s(fd, 'rooms'), s(fd, 'occupant'), n(fd, 'monthly_rent'), s(fd, 'note'), n(fd, 'area'), s(fd, 'elec_meter'), s(fd, 'water_meter'), s(fd, 'features')];
   const back_ = s(fd, 'back') || `/properties/${pid}`;
@@ -124,7 +125,7 @@ export async function saveUnit(fd: FormData) {
   await log(u, id ? 'تعديل وحدة' : 'إضافة وحدة', 'unit', unitId, code!); done(back_, 'تم حفظ الوحدة' + (nf ? ` وإرفاق ${nf} ملف` : ''));
 }
 export async function deleteUnit(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, pid = s(fd, 'property_id')!;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, pid = s(fd, 'property_id')!;
   const [{ c }] = await q('select count(*)::int c from contracts where unit_id=$1', [id]);
   if (c > 0) back(`/properties/${pid}`, 'لا يمكن حذف وحدة مرتبطة بعقود');
   await q('delete from units where id=$1', [id]); await log(u, 'حذف وحدة', 'unit', id); done(`/properties/${pid}`, 'تم حذف الوحدة');
@@ -133,7 +134,7 @@ export async function deleteUnit(fd: FormData) {
 // ---------- المستأجرون ----------
 const TENANT_COLS = ['name', 'tenant_type', 'phone', 'phone2', 'email', 'national_id', 'nationality', 'id_expiry', 'cr_no', 'cr_expiry', 'vat_no', 'contact_person', 'address', 'guarantor_name', 'guarantor_phone', 'guarantor_id', 'notes'];
 export async function saveTenant(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id'), name = s(fd, 'name');
+  const u = await requireAction('accountant'); const id = s(fd, 'id'), name = s(fd, 'name');
   const path = id ? `/tenants/${id}/edit` : '/tenants/new';
   if (!name) back(path, 'اسم المستأجر مطلوب');
   for (const k of ['phone', 'phone2', 'guarantor_phone']) { const v = s(fd, k); if (v && !/^[0-9+\s-]{7,20}$/.test(v)) back(path, 'رقم جوال غير صحيح'); }
@@ -173,7 +174,7 @@ async function insertSchedule(t: Q, cid: string, start: string, end: string, ren
       [uid('i'), cid, i.no + fromNo - 1, i.period_from, i.period_to, i.due_date, i.amount]);
 }
 export async function createContract(fd: FormData) {
-  const u = await requireUser('accountant');
+  const u = await requireAction('accountant');
   const unit = s(fd, 'unit_id'), tenant = s(fd, 'tenant_id'), start = s(fd, 'start_date'), end = s(fd, 'end_date');
   const rent = n(fd, 'annual_rent'), freq = s(fd, 'frequency') as Frequency;
   const path = '/contracts/new';
@@ -195,7 +196,7 @@ export async function createContract(fd: FormData) {
   await log(u, 'إضافة عقد', 'contract', id, `إيجار ${money(rent!)}`); done(`/contracts/${id}`, 'تم إنشاء العقد وجدول أقساطه' + (nf ? ` مع ${nf} ملف` : ''));
 }
 export async function updateContract(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!, path = `/contracts/${id}`;
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!, path = `/contracts/${id}`;
   const cno = s(fd, 'contract_no');
   const [cur] = await q('select contract_no from contracts where id=$1', [id]);
   // يُمنع إدخال رقم مكرر جديد؛ الرقم المكرر القديم لا يمنع تعديل باقي البيانات (يظهر في التدقيق)
@@ -211,7 +212,7 @@ export async function updateContract(fd: FormData) {
 }
 /** تعديل فترة العقد وقيمته؛ يعيد توليد الأقساط غير المسددة اللاحقة فقط. */
 export async function rescheduleContract(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, path = `/contracts/${id}`;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, path = `/contracts/${id}`;
   const end = s(fd, 'end_date'), rent = n(fd, 'annual_rent'), freq = s(fd, 'frequency') as Frequency, from = s(fd, 'from_date');
   if (!isDate(end) || !isDate(from) || rent == null || Number.isNaN(rent) || rent < 0) back(path, 'أكمل تاريخ النهاية والإيجار وتاريخ بدء التطبيق');
   const [c] = await q('select * from contracts where id=$1', [id]);
@@ -236,14 +237,14 @@ async function fillSchedule(id: string) {
   return miss;
 }
 export async function completeSchedule(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!;
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!;
   const miss = await fillSchedule(id);
   if (!miss.length) back(`/contracts/${id}`, 'جدول الأقساط مكتمل حتى نهاية العقد');
   await log(u, 'استكمال جدول أقساط', 'contract', id, `${miss.length} أقساط بقيمة ${money(miss.reduce((x, i) => x + i.amount, 0))}`);
   done(`/contracts/${id}`, `أضيف ${miss.length} أقساط حتى نهاية العقد`);
 }
 export async function completeAllSchedules() {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const cs = await q(`select id from contracts where status='active'`);
   let n = 0, amt = 0;
   for (const c of cs) { const m = await fillSchedule(c.id); n += m.length; amt += m.reduce((x, i) => x + i.amount, 0); }
@@ -251,7 +252,7 @@ export async function completeAllSchedules() {
   done('/contracts', n ? `أضيف ${n} أقساط بقيمة ${money(amt)} ريال لاستكمال جداول العقود السارية` : 'كل جداول العقود السارية مكتملة');
 }
 export async function terminateContract(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, d = s(fd, 'date'), reason = s(fd, 'reason');
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, d = s(fd, 'date'), reason = s(fd, 'reason');
   if (!isDate(d)) back(`/contracts/${id}`, 'أدخل تاريخ الإنهاء');
   await tx(async (t) => {
     await t(`update contracts set status='terminated', end_date=$1, notes=trim(notes||' '||$2) where id=$3`, [d, 'إنهاء: ' + (reason ?? ''), id]);
@@ -261,7 +262,7 @@ export async function terminateContract(fd: FormData) {
   await log(u, 'إنهاء عقد', 'contract', id, reason ?? ''); done(`/contracts/${id}`, 'تم إنهاء العقد وحذف الأقساط اللاحقة غير المسددة');
 }
 export async function renewContract(fd: FormData) {
-  const u = await requireUser('accountant'); const old = s(fd, 'id')!;
+  const u = await requireAction('accountant'); const old = s(fd, 'id')!;
   const start = s(fd, 'start_date'), end = s(fd, 'end_date'), rent = n(fd, 'annual_rent'), freq = s(fd, 'frequency') as Frequency;
   if (!isDate(start) || !isDate(end) || end! <= start!) back(`/contracts/${old}/renew`, 'تحقق من التواريخ');
   if (rent == null || Number.isNaN(rent)) back(`/contracts/${old}/renew`, 'أدخل الإيجار السنوي');
@@ -281,7 +282,7 @@ export async function renewContract(fd: FormData) {
 
 // ---------- الأقساط ----------
 export async function addInstallment(fd: FormData) {
-  const u = await requireUser('accountant'); const cid = s(fd, 'contract_id')!, due = s(fd, 'due_date'), amt = n(fd, 'amount');
+  const u = await requireAction('accountant'); const cid = s(fd, 'contract_id')!, due = s(fd, 'due_date'), amt = n(fd, 'amount');
   if (!isDate(due) || !amt || Number.isNaN(amt)) back(`/contracts/${cid}`, 'أدخل تاريخ الاستحقاق والمبلغ');
   const [{ m }] = await q('select coalesce(max(no),0)::int m from installments where contract_id=$1', [cid]);
   await q('insert into installments (id,contract_id,no,period_from,period_to,due_date,amount,note) values ($1,$2,$3,$4,$5,$6,$7,$8)',
@@ -289,7 +290,7 @@ export async function addInstallment(fd: FormData) {
   await log(u, 'إضافة قسط', 'contract', cid, money(amt!)); done(`/contracts/${cid}`, 'تمت إضافة القسط');
 }
 export async function updateInstallment(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!, due = s(fd, 'due_date'), amt = n(fd, 'amount');
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!, due = s(fd, 'due_date'), amt = n(fd, 'amount');
   if (!isDate(due) || amt == null || Number.isNaN(amt)) back(`/installments/${id}`, 'تحقق من التاريخ والمبلغ');
   const [ib] = await q('select * from installments where id=$1', [id]);
   await trackChanges(q, u, 'installment', id, ib, { due_date: due, amount: amt, note: s(fd, 'note') ?? '' }, LABELS);
@@ -297,7 +298,7 @@ export async function updateInstallment(fd: FormData) {
   await log(u, 'تعديل قسط', 'installment', id, money(amt!)); done(`/installments/${id}`, 'تم حفظ القسط');
 }
 export async function confirmInstallment(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!, kind = s(fd, 'kind');
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!, kind = s(fd, 'kind');
   const [i] = await q('select * from installments where id=$1', [id]);
   if (kind === 'paid') {
     const ref = [s(fd, 'bank_date') && `إيداع ${s(fd, 'bank_date')}`, s(fd, 'bank_ref') && `مرجع ${s(fd, 'bank_ref')}`, s(fd, 'receipt') && `سند ${s(fd, 'receipt')}`].filter(Boolean).join(' • ');
@@ -308,7 +309,7 @@ export async function confirmInstallment(fd: FormData) {
   await log(u, 'قسط لم يثبت سداده', 'installment', id, money(i.amount)); done(`/installments/${id}`, 'تحوّل القسط إلى المتأخرات');
 }
 export async function deleteInstallment(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!;
   const [i] = await q('select contract_id, opening_paid from installments where id=$1', [id]);
   const [a] = await q('select 1 from payment_allocations where installment_id=$1', [id]);
   if (a || Number(i.opening_paid) > 0) back(`/installments/${id}`, 'لا يمكن حذف قسط عليه مدفوعات');
@@ -317,7 +318,7 @@ export async function deleteInstallment(fd: FormData) {
 
 // ---------- المقبوضات ----------
 export async function recordPayment(fd: FormData) {
-  const u = await requireUser('accountant');
+  const u = await requireAction('accountant');
   const tenant = s(fd, 'tenant_id'), contract = s(fd, 'contract_id'), first = s(fd, 'installment_id'), date = s(fd, 'paid_on'), amt = n(fd, 'amount'), method = s(fd, 'method');
   const path = `/payments/new?tenant=${encodeURIComponent(tenant ?? '')}${contract ? '&contract=' + encodeURIComponent(contract) : ''}${first ? '&inst=' + encodeURIComponent(first) : ''}`;
   if (!tenant || !contract) back(path, 'اختر المستأجر والعقد');
@@ -350,7 +351,7 @@ export async function recordPayment(fd: FormData) {
   done(`/payments/${id}`, `تم تسجيل السند ${receipt}`);
 }
 export async function voidPayment(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason');
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason');
   if (!reason) back(`/payments/${id}`, 'سبب الإلغاء مطلوب');
   const [pp] = await q('select paid_on, created_by from payments where id=$1', [id]); await assertOpenPeriod(pp?.paid_on, `/payments/${id}`);
   try { const f = JSON.parse((await q(`select value from settings where key='features'`))[0]?.value || '{}'); if (f.maker_checker && pp?.created_by === u.full_name) back(`/payments/${id}`, 'الرقابة المزدوجة مفعّلة: لا يلغي السند من سجّله؛ يلزم مستخدم آخر'); } catch (e: any) { if (String(e?.digest ?? '').startsWith('NEXT_REDIRECT')) throw e; }
@@ -362,7 +363,7 @@ export async function voidPayment(fd: FormData) {
 
 // ---------- الخصومات والمتابعة ----------
 export async function addAdjustment(fd: FormData) {
-  const u = await requireUser('accountant'); const iid = s(fd, 'installment_id')!, amt = n(fd, 'amount'), type = s(fd, 'type');
+  const u = await requireAction('accountant'); const iid = s(fd, 'installment_id')!, amt = n(fd, 'amount'), type = s(fd, 'type');
   if (!amt || Number.isNaN(amt) || amt <= 0 || !type) back(`/installments/${iid}`, 'أدخل نوع الخصم ومبلغه');
   const [i] = await q('select i.*, c.tenant_id, c.property_id from installments i join contracts c on c.id=i.contract_id where i.id=$1', [iid]);
   await assertOpenPeriod(todayRiyadh(), `/installments/${iid}`);
@@ -371,7 +372,7 @@ export async function addAdjustment(fd: FormData) {
   await log(u, 'طلب خصم/إعفاء', 'installment', iid, `${type} ${money(amt!)}`); done(`/installments/${iid}`, 'أُرسل طلب الخصم للاعتماد؛ لا يؤثر في الرصيد قبل اعتماده');
 }
 export async function addFollowUp(fd: FormData) {
-  const u = await requireUser('accountant'); const tid = s(fd, 'tenant_id')!, d = s(fd, 'date'), type = s(fd, 'type');
+  const u = await requireAction('accountant'); const tid = s(fd, 'tenant_id')!, d = s(fd, 'date'), type = s(fd, 'type');
   if (!isDate(d) || !type) back(`/tenants/${tid}`, 'أدخل تاريخ المتابعة ونوعها');
   await q('insert into followups (id,tenant_id,date,type,details,next_date,created_by) values ($1,$2,$3,$4,$5,$6,$7)',
     [uid('f'), tid, d, type, s(fd, 'details'), s(fd, 'next_date'), u.full_name]);
@@ -380,7 +381,7 @@ export async function addFollowUp(fd: FormData) {
 
 // ---------- المصروفات ----------
 export async function saveExpense(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), d = s(fd, 'date'), amt = n(fd, 'amount'), cat = s(fd, 'category');
+  const u = await requireAction('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), d = s(fd, 'date'), amt = n(fd, 'amount'), cat = s(fd, 'category');
   const path = id ? `/expenses/${id}` : '/expenses/new';
   if (!pid || !isDate(d) || !cat || !amt || Number.isNaN(amt) || amt <= 0) back(path, 'أكمل العقار والتاريخ والبند والمبلغ');
   await assertOpenPeriod(d, path);
@@ -391,13 +392,13 @@ export async function saveExpense(fd: FormData) {
   await log(u, id ? 'تعديل مصروف' : 'إضافة مصروف', 'expense', id ?? undefined, `${cat} ${money(amt!)}`); done('/expenses', 'تم حفظ المصروف');
 }
 export async function deleteExpense(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!;
   await q('delete from expenses where id=$1', [id]); await log(u, 'حذف مصروف', 'expense', id); done('/expenses', 'تم حذف المصروف');
 }
 
 // ---------- ملاحظات التدقيق ----------
 export async function resolveNote(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!, res = s(fd, 'resolution'), back_ = s(fd, 'back') ?? '/audit';
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!, res = s(fd, 'resolution'), back_ = s(fd, 'back') ?? '/audit';
   if (s(fd, 'reopen')) { await q(`update audit_notes set status='open', resolution=null, resolved_by=null, resolved_at=null where id=$1`, [id]); await log(u, 'إعادة فتح ملاحظة', 'note', id); done(back_, 'أُعيد فتح الملاحظة'); }
   if (!res) back(back_, 'اكتب الإجراء المتخذ لإغلاق الملاحظة');
   await q(`update audit_notes set status='resolved', resolution=$1, resolved_by=$2, resolved_at=now() where id=$3`, [res, u.full_name, id]);
@@ -406,7 +407,7 @@ export async function resolveNote(fd: FormData) {
 
 // ---------- الإعدادات والمستخدمون ----------
 export async function saveSettings(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const grace = n(fd, 'grace_days');
   if (grace == null || Number.isNaN(grace) || grace < 0 || grace > 60) back('/settings', 'مهلة السداد بين 0 و60 يوماً');
   for (const k of ['org', 'receipt_prefix']) { const v = s(fd, k); if (v) await q('update settings set value=$1 where key=$2', [v, k]); }
@@ -414,7 +415,7 @@ export async function saveSettings(fd: FormData) {
   await log(u, 'تعديل الإعدادات'); done('/settings', 'تم حفظ الإعدادات');
 }
 export async function saveUser(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id'), username = s(fd, 'username')?.toLowerCase(), name = s(fd, 'full_name'), role = s(fd, 'role'), pass = s(fd, 'password');
+  const u = await requireAction('admin'); const id = s(fd, 'id'), username = s(fd, 'username')?.toLowerCase(), name = s(fd, 'full_name'), role = s(fd, 'role'), pass = s(fd, 'password');
   if (!username || !/^[a-z0-9._-]{3,30}$/.test(username) || !name || !role) back('/settings/users', 'اسم المستخدم (حروف إنجليزية وأرقام) والاسم والصلاحية مطلوبة');
   if (!id && (!pass || pass.length < 8)) back('/settings/users', 'كلمة المرور المؤقتة 8 أحرف على الأقل');
   if (id) {

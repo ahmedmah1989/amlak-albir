@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { runCycle, generate, sendItem, KINDS } from './notify';
 
 const s = (fd: FormData, k: string) => { const v = String(fd.get(k) ?? '').trim(); return v === '' ? null : v; };
@@ -11,17 +11,17 @@ const ids = (fd: FormData) => [...fd.getAll('ids'), ...fd.getAll('id')].map(Stri
 const backOf = (fd: FormData) => { const b = s(fd, 'back') || '/notifications'; return b.startsWith('/notifications') || b.startsWith('/tenants/') ? b : '/notifications'; };
 
 export async function runNotifyNow(fd: FormData) {
-  const u = await requireUser('accountant');
+  const u = await requireAction('accountant');
   const r = await runCycle(u.full_name);
   go(backOf(fd), 'ok', `تم التشغيل: ${r.added} تذكير جديد • أُرسل ${r.sent} • فشل ${r.failed} • جاهز لواتساب يدوي ${r.manual}`);
 }
 export async function previewNotify(fd: FormData) {
-  const u = await requireUser('accountant'); const r = await generate();
+  const u = await requireAction('accountant'); const r = await generate();
   await log(u, 'تجهيز التذكيرات', undefined, undefined, `جديد ${r.added}`);
   go(backOf(fd), 'ok', r.added ? `أُضيف ${r.added - r.internal} تذكير جديد للمستأجرين${r.internal ? ` و${r.internal} تنبيه داخلي للموظفين` : ''} — بدون إرسال` : 'لا تذكيرات جديدة اليوم');
 }
 export async function approveAndSend(fd: FormData) {
-  const u = await requireUser('accountant'); const list = ids(fd); if (!list.length) go(backOf(fd), 'err', 'اختر تذكيراً واحداً على الأقل');
+  const u = await requireAction('accountant'); const list = ids(fd); if (!list.length) go(backOf(fd), 'err', 'اختر تذكيراً واحداً على الأقل');
   await q(`update notify_queue set status='approved', approved_by=$2, error=null where id = any($1) and status in ('pending','failed')`, [list, u.full_name]);
   const out: Record<string, number> = { sent: 0, failed: 0, manual: 0 };
   for (const id of list) { const r = await sendItem(id, u.full_name); if (r in out) out[r]++; }
@@ -29,18 +29,18 @@ export async function approveAndSend(fd: FormData) {
   go(backOf(fd), out.failed ? 'err' : 'ok', `أُرسل ${out.sent}${out.manual ? ` • ${out.manual} جاهزة للإرسال اليدوي بواتساب` : ''}${out.failed ? ` • فشل ${out.failed} (راجع سبب الفشل)` : ''}`);
 }
 export async function cancelItems(fd: FormData) {
-  const u = await requireUser('accountant'); const list = ids(fd); if (!list.length) go(backOf(fd), 'err', 'اختر تذكيراً واحداً على الأقل');
+  const u = await requireAction('accountant'); const list = ids(fd); if (!list.length) go(backOf(fd), 'err', 'اختر تذكيراً واحداً على الأقل');
   await q(`update notify_queue set status='cancelled', approved_by=$2 where id = any($1) and status in ('pending','approved','failed','manual')`, [list, u.full_name]);
   await log(u, 'إلغاء تذكيرات', undefined, undefined, String(list.length));
   go(backOf(fd), 'ok', `أُلغي ${list.length} تذكير`);
 }
 export async function markManualSent(fd: FormData) {
-  const u = await requireUser('accountant'); const list = ids(fd);
+  const u = await requireAction('accountant'); const list = ids(fd);
   await q(`update notify_queue set status='sent', sent_by=$2, sent_at=now() where id = any($1) and status='manual'`, [list, u.full_name]);
   go(backOf(fd), 'ok', 'تم تسجيلها كمُرسلة');
 }
 export async function setTenantOptOut(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'tenant_id'); const on = s(fd, 'on') === '1';
+  const u = await requireAction('accountant'); const id = s(fd, 'tenant_id'); const on = s(fd, 'on') === '1';
   if (!id) go(backOf(fd), 'err', 'مستأجر غير محدد');
   await q('update tenants set notify_opt_out=$2 where id=$1', [id, on]);
   if (on) await q(`update notify_queue set status='cancelled', error='المستأجر طلب عدم مراسلته' where tenant_id=$1 and status in ('pending','approved','manual')`, [id]);
@@ -48,7 +48,7 @@ export async function setTenantOptOut(fd: FormData) {
   go(backOf(fd), 'ok', on ? 'لن تُرسل تذكيرات لهذا المستأجر' : 'أُعيد تفعيل التذكيرات للمستأجر');
 }
 export async function markRead(fd: FormData) {
-  const u = await requireUser(); const id = s(fd, 'id');
+  const u = await requireAction(); const id = s(fd, 'id');
   if (id) await q(`update notifications set read_by='1' where id=$1 and user_id=$2`, [id, u.id]); else await q(`update notifications set read_by='1' where user_id=$1 and read_by=''`, [u.id]);
   const href = s(fd, 'href'); if (href && href.startsWith('/')) { revalidatePath('/', 'layout'); redirect(href); }
   go('/notifications?tab=mine', 'ok', 'تم');
@@ -56,7 +56,7 @@ export async function markRead(fd: FormData) {
 
 // ---------- القواعد والإعدادات (للمدير) ----------
 export async function saveRule(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id'); const kind = s(fd, 'kind') ?? '';
+  const u = await requireAction('admin'); const id = s(fd, 'id'); const kind = s(fd, 'kind') ?? '';
   const K = KINDS.find((k) => k.key === kind); if (!K) go('/notifications?tab=rules', 'err', 'نوع التنبيه غير معروف');
   const channels = fd.getAll('channels').map(String).filter((c) => ['email', 'sms', 'whatsapp', 'internal'].includes(c));
   if (!channels.length) go('/notifications?tab=rules', 'err', 'اختر قناة إرسال واحدة على الأقل');
@@ -71,12 +71,12 @@ export async function saveRule(fd: FormData) {
   go('/notifications?tab=rules', 'ok', 'تم حفظ القاعدة');
 }
 export async function deleteRule(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id');
+  const u = await requireAction('admin'); const id = s(fd, 'id');
   await q('delete from notify_rules where id=$1', [id]); await q(`update notify_queue set status='cancelled' where rule_id=$1 and status in ('pending','approved')`, [id]);
   await log(u, 'حذف قاعدة تنبيه', undefined, id ?? undefined); go('/notifications?tab=rules', 'ok', 'حُذفت القاعدة');
 }
 export async function saveNotifySettings(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const hour = Math.max(0, Math.min(23, Number(s(fd, 'notify_hour') ?? 9) || 9));
   const vals: [string, string][] = [['notify_enabled', s(fd, 'notify_enabled') === '1' ? '1' : '0'], ['notify_hour', String(hour)], ['wa_url', s(fd, 'wa_url') ?? ''], ['wa_method', s(fd, 'wa_method') === 'GET' ? 'GET' : 'POST'], ['wa_body', s(fd, 'wa_body') ?? '']];
   for (const [k, v] of vals) await q('insert into settings values ($1,$2) on conflict (key) do update set value=excluded.value', [k, v]);

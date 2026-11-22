@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { todayRiyadh, getSettings } from './data';
 import { assertOpenPeriod } from './guard';
 import { parseFeatures } from './features';
@@ -55,7 +55,7 @@ async function issueFor(t: Q, S: Record<string, string>, u: { full_name: string 
 }
 
 export async function issueInvoice(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'installment_id')!; const path = `/installments/${id}`;
+  const u = await requireAction('accountant'); const id = s(fd, 'installment_id')!; const path = `/installments/${id}`;
   const S = await guard(path); await assertOpenPeriod(todayRiyadh(), path);
   const r = await tx((t) => issueFor(t, S, u, id));
   if ('err' in r) back(path, r.err!);
@@ -64,7 +64,7 @@ export async function issueInvoice(fd: FormData) {
   done(`/invoices/${r.id}`, `صدرت الفاتورة ${r.no}${z ? ` • ${z.msg}` : ''}`);
 }
 export async function issueInvoices(fd: FormData) {
-  const u = await requireUser('accountant'); const ids = String(fd.get('ids') ?? '').split(',').filter(Boolean).slice(0, 200);
+  const u = await requireAction('accountant'); const ids = String(fd.get('ids') ?? '').split(',').filter(Boolean).slice(0, 200);
   const S = await guard('/invoices'); await assertOpenPeriod(todayRiyadh(), '/invoices');
   let ok = 0; const errs: string[] = [];
   for (const id of ids) { const r = await tx((t) => issueFor(t, S, u, id)); if ('err' in r) errs.push(r.err!); else { ok++; if (zatcaActive(S)) await submitInvoice(r.id).catch(() => {}); } }
@@ -72,7 +72,7 @@ export async function issueInvoices(fd: FormData) {
   done('/invoices', `صدرت ${ok} فاتورة${errs.length ? ` • تُرك ${errs.length} (لها فواتير سارية أو غير صالحة)` : ''}`);
 }
 export async function creditInvoice(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason'); const path = `/invoices/${id}`;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason'); const path = `/invoices/${id}`;
   if (!reason) back(path, 'سبب إشعار الدائن مطلوب');
   const S = await guard(path);
   const [inv] = await q('select * from invoices where id=$1', [id]); if (!inv) back('/invoices', 'الفاتورة غير موجودة');

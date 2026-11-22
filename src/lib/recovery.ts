@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { randomBytes, randomInt } from 'crypto';
 import { q, uid } from './db';
-import { requireUser, log, type User } from './auth';
+import { requireAction, log, type User } from './auth';
 import { hashPassword, verifyPassword } from './password';
 import { getSettings } from './data';
 import { sendMail, smtpFrom } from './mailer';
@@ -28,7 +28,7 @@ const failed = (username: string, how: string) => q(`insert into activity_log (u
 
 // ---------- إعداد الطرق من «حسابي» ----------
 export async function generateRecoveryCodes(fd: FormData) {
-  const u = await requireUser(); const cur = s(fd, 'current');
+  const u = await requireAction(); const cur = s(fd, 'current');
   const [row] = await q('select pass_hash from users where id=$1', [u.id]);
   if (!cur || !verifyPassword(cur, row.pass_hash)) go('/account', 'err', 'كلمة المرور الحالية غير صحيحة');
   const codes = Array.from({ length: 8 }, fmtCode);
@@ -38,7 +38,7 @@ export async function generateRecoveryCodes(fd: FormData) {
 }
 
 export async function saveRecoveryMethods(fd: FormData) {
-  const u = await requireUser(); const cur = s(fd, 'current');
+  const u = await requireAction(); const cur = s(fd, 'current');
   const [row] = await q('select * from users where id=$1', [u.id]);
   if (!cur || !verifyPassword(cur, row.pass_hash)) go('/account', 'err', 'للحفظ اكتب كلمة المرور الحالية صحيحة');
   const email = s(fd, 'email'), phone = s(fd, 'phone')?.replace(/[^\d+]/g, '') ?? null;
@@ -119,7 +119,7 @@ export async function recoverPassword(fd: FormData) {
 
 // ---------- إعدادات البريد والرسائل (للمدير) ----------
 export async function saveRecoverySettings(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const keys = ['smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from', 'sms_url', 'sms_method', 'sms_body'];
   for (const k of keys) await q('insert into settings values ($1,$2) on conflict (key) do update set value=excluded.value', [k, s(fd, k) ?? '']);
   for (const k of ['smtp_pass', 'sms_auth']) { const v = s(fd, k); if (v === '-') await q(`update settings set value='' where key=$1`, [k]); else if (v) await q('insert into settings values ($1,$2) on conflict (key) do update set value=excluded.value', [k, v]); }
@@ -127,7 +127,7 @@ export async function saveRecoverySettings(fd: FormData) {
   go('/settings', 'ok', 'تم حفظ إعدادات البريد والرسائل');
 }
 export async function testRecoveryChannel(fd: FormData) {
-  const u = await requireUser('admin'); const ch = s(fd, 'channel'), to = s(fd, 'to'); const S = await getSettings();
+  const u = await requireAction('admin'); const ch = s(fd, 'channel'), to = s(fd, 'to'); const S = await getSettings();
   if (!to) go('/settings', 'err', 'اكتب البريد أو الجوال المراد التجربة عليه');
   try {
     if (ch === 'email') { const c = smtpFrom(S); if (!c) go('/settings', 'err', 'أكمل إعدادات البريد أولاً'); await sendMail(c!, to!, 'تجربة بريد نظام الأملاك', `هذه رسالة تجربة من نظام الأملاك (${S.org}). الإعدادات تعمل.`); }

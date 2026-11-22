@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid } from './db';
-import { requireUser, log, type User } from './auth';
+import { requireAction, log, type User } from './auth';
 import { readSheet, parseEjar, guessBank, bankLines, type BankMap } from './sheets';
 import { todayRiyadh } from './data';
 import { restore as doRestore } from './backup';
@@ -17,7 +17,7 @@ const isHex = (v: string | null) => !!v && /^#[0-9a-f]{6}$/i.test(v);
 
 // ---------- المظهر والتفضيلات ----------
 export async function setPref(fd: FormData) {
-  const u = await requireUser(); const p = JSON.parse(u.prefs || '{}');
+  const u = await requireAction(); const p = JSON.parse(u.prefs || '{}');
   const fz = s(fd, 'fz'); if (fz === '+' || fz === '-') p.fz = Math.max(85, Math.min(130, (p.fz ?? 100) + (fz === '+' ? 5 : -5))); else if (fz) p.fz = Math.max(85, Math.min(130, Number(fz)));
   for (const k of ['font', 'date_format']) { const v = s(fd, k); if (v !== null) p[k] = v === 'default' ? undefined : v; }
   const th = s(fd, 'theme'); if (th === 'light' || th === 'dark' || th === 'auto') p.theme = th === 'light' ? undefined : th;
@@ -26,7 +26,7 @@ export async function setPref(fd: FormData) {
   revalidatePath('/', 'layout'); const b = s(fd, 'back') || '/'; redirect(/[^\x00-\x7f]/.test(b) ? encodeURI(b) : b);
 }
 export async function saveAppearance(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   if (s(fd, 'reset')) { for (const [k, v] of [['brand_primary', '#456a42'], ['brand_accent', '#ba8f0e'], ['brand_side', '#23361f'], ['brand_bg', '#f4f5f1'], ['brand_logo', ''], ['font_default', 'Readex Pro']]) await q('update settings set value=$1 where key=$2', [v, k]); await log(u, 'استعادة هوية الجمعية'); done('/settings/appearance', 'استُعيدت هوية الجمعية الافتراضية'); }
   for (const k of ['brand_primary', 'brand_accent', 'brand_side', 'brand_bg']) { const v = s(fd, k); if (v) { if (!isHex(v)) back('/settings/appearance', 'لون غير صحيح'); await q('update settings set value=$1 where key=$2', [v, k]); } }
   const font = s(fd, 'font_default'); if (font) await q(`update settings set value=$1 where key='font_default'`, [font]);
@@ -39,7 +39,7 @@ export async function saveAppearance(fd: FormData) {
   await log(u, 'تعديل الهوية والمظهر'); done('/settings/appearance', 'تم حفظ الهوية والمظهر');
 }
 export async function saveSystem(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const df = s(fd, 'date_format'); if (df) await q(`update settings set value=$1 where key='date_format'`, [df]);
   const lk = s(fd, 'locked_until') ?? ''; await q(`update settings set value=$1 where key='locked_until'`, [lk]);
   const keep = n(fd, 'backup_keep'); if (keep && keep >= 3 && keep <= 365) await q(`update settings set value=$1 where key='backup_keep'`, [String(keep)]);
@@ -48,14 +48,14 @@ export async function saveSystem(fd: FormData) {
 
 // ---------- المرفقات ----------
 export async function uploadAttachment(fd: FormData) {
-  const u = await requireUser('accountant'); const entity = s(fd, 'entity')!, id = s(fd, 'entity_id')!, backTo = s(fd, 'back') || '/';
+  const u = await requireAction('accountant'); const entity = s(fd, 'entity')!, id = s(fd, 'entity_id')!, backTo = s(fd, 'back') || '/';
   const files = fd.getAll('files').filter((x): x is File => x instanceof File && x.size > 0);
   if (!files.length) back(backTo, 'اختر ملفاً واحداً على الأقل');
   let c = 0; try { c = await saveFiles(entity, id, files, u, s(fd, 'category'), s(fd, 'expires_on')); } catch (e: any) { back(backTo, e.message); }
   await log(u, 'إرفاق مستندات', entity, id, `${c} ملف`); done(backTo, c === 1 ? 'تم إرفاق ملف واحد' : c === 2 ? 'تم إرفاق ملفين' : `تم إرفاق ${c} ملفات`);
 }
 export async function deleteAttachment(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, backTo = s(fd, 'back') || '/';
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, backTo = s(fd, 'back') || '/';
   const [a] = await q('select file_name from attachments where id=$1', [id]);
   await q('delete from attachments where id=$1', [id]); await log(u, 'حذف مرفق', 'attachment', id, a?.file_name); done(backTo, 'تم حذف المرفق');
 }
@@ -73,7 +73,7 @@ async function relinkEjar(t: (s: string, p?: unknown[]) => Promise<any[]>, contr
   return 1;
 }
 export async function importEjar(fd: FormData) {
-  const u = await requireUser('accountant'); const f = fd.get('file') as File | null;
+  const u = await requireAction('accountant'); const f = fd.get('file') as File | null;
   if (!f || !f.size) back('/ejar', 'اختر ملف إيجار (xlsx أو csv)');
   let parsed; try { parsed = parseEjar(readSheet(await f.arrayBuffer())); } catch (e: any) { back('/ejar', e.message); }
   if (!parsed.items.length) back('/ejar', 'الملف لا يحتوي على أقساط');
@@ -92,13 +92,13 @@ export async function importEjar(fd: FormData) {
   done(`/ejar?c=${[...nos][0]}`, `تم استيراد ${parsed.items.length} قسطاً لعدد ${nos.size} عقد`);
 }
 export async function linkEjar(fd: FormData) {
-  const u = await requireUser('accountant'); const no = s(fd, 'contract_no')!, cid = s(fd, 'contract_id');
+  const u = await requireAction('accountant'); const no = s(fd, 'contract_no')!, cid = s(fd, 'contract_id');
   if (!cid) back(`/ejar?c=${no}`, 'اختر العقد');
   await tx(async (t) => { await t(`update contracts set contract_no=coalesce(nullif(contract_no,''),$1) where id=$2`, [no, cid]); await t('update ejar_installments set contract_id=$1 where contract_no=$2', [cid, no]); await relinkEjar(t, no); });
   await log(u, 'ربط عقد إيجار', 'contract', cid!, no); done(`/ejar?c=${no}`, 'تم ربط عقد إيجار بالعقد');
 }
 export async function contractFromEjar(fd: FormData) {
-  const u = await requireUser('accountant'); const no = s(fd, 'contract_no')!, unit = s(fd, 'unit_id'), tenant = s(fd, 'tenant_id');
+  const u = await requireAction('accountant'); const no = s(fd, 'contract_no')!, unit = s(fd, 'unit_id'), tenant = s(fd, 'tenant_id');
   if (!unit || !tenant) back(`/ejar?c=${no}`, 'اختر الوحدة والمستأجر');
   const rows = await q('select * from ejar_installments where contract_no=$1 order by issue_date', [no]);
   if (!rows.length) back('/ejar', 'لا توجد أقساط لهذا العقد');
@@ -121,13 +121,13 @@ export async function contractFromEjar(fd: FormData) {
 
 // ---------- كشف البنك ----------
 export async function saveBankAccount(fd: FormData) {
-  const u = await requireUser('admin'); const name = s(fd, 'name'); if (!name) back('/bank', 'اسم الحساب مطلوب');
+  const u = await requireAction('admin'); const name = s(fd, 'name'); if (!name) back('/bank', 'اسم الحساب مطلوب');
   const iban = s(fd, 'iban'); if (iban && !/^SA\d{22}$/i.test(iban.replace(/\s/g, ''))) back('/bank', 'رقم الآيبان يجب أن يبدأ بـ SA ويتكون من 24 خانة');
   await q('insert into bank_accounts (id,name,bank,iban) values ($1,$2,$3,$4)', [uid('ba'), name, s(fd, 'bank'), iban?.replace(/\s/g, '').toUpperCase() ?? null]);
   await log(u, 'إضافة حساب بنكي', undefined, undefined, name!); done('/bank', 'تمت إضافة الحساب');
 }
 export async function uploadBank(fd: FormData) {
-  const u = await requireUser('accountant'); const acc = s(fd, 'account_id'), f = fd.get('file') as File | null;
+  const u = await requireAction('accountant'); const acc = s(fd, 'account_id'), f = fd.get('file') as File | null;
   if (!acc) back('/bank', 'اختر الحساب البنكي'); if (!f || !f.size) back('/bank', 'اختر ملف كشف الحساب');
   let rows: string[][]; try { rows = readSheet(await f!.arrayBuffer()); } catch { back('/bank', 'تعذّرت قراءة الملف؛ المقبول xlsx أو xls أو csv'); }
   const [a] = await q('select mapping from bank_accounts where id=$1', [acc]);
@@ -137,7 +137,7 @@ export async function uploadBank(fd: FormData) {
   redirect(`/bank/import/${id}`);
 }
 export async function confirmBankImport(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!;
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!;
   const [imp] = await q('select * from bank_imports where id=$1', [id]); if (!imp || imp.status !== 'pending') back('/bank', 'الاستيراد غير موجود أو تم تأكيده');
   const map: BankMap = { header: Number(s(fd, 'header') ?? 0), date: Number(s(fd, 'date') ?? -1), credit: Number(s(fd, 'credit') ?? -1), debit: Number(s(fd, 'debit') ?? -1), amount: Number(s(fd, 'amount') ?? -1), desc: Number(s(fd, 'desc') ?? -1), ref: Number(s(fd, 'ref') ?? -1) };
   if (map.date < 0 || (map.credit < 0 && map.amount < 0)) back(`/bank/import/${id}`, 'حدد عمود التاريخ وعمود المبلغ الدائن (أو المبلغ)');
@@ -157,7 +157,7 @@ export async function confirmBankImport(fd: FormData) {
   done('/bank/match', `أُضيف ${added === 1 ? 'إيداع واحد' : added === 2 ? 'إيداعان' : added <= 10 ? added + ' إيداعات' : added + ' إيداعاً'}${dup ? ` وتُجوهل ${dup} مكرر سبق استيراده` : ''}`);
 }
 export async function matchBankLine(fd: FormData) {
-  const u = await requireUser('accountant'); const lid = s(fd, 'line_id')!, kind = s(fd, 'kind'), ids = (s(fd, 'ids') ?? '').split(',').filter(Boolean);
+  const u = await requireAction('accountant'); const lid = s(fd, 'line_id')!, kind = s(fd, 'kind'), ids = (s(fd, 'ids') ?? '').split(',').filter(Boolean);
   const [l] = await q('select * from bank_lines where id=$1', [lid]); if (!l || l.status !== 'open') back('/bank/match', 'الإيداع غير متاح للمطابقة');
   await assertOpenPeriod(l.date, '/bank/match');
   if (kind === 'payment') {
@@ -185,13 +185,13 @@ export async function matchBankLine(fd: FormData) {
   await log(u, 'سند من مطابقة البنك', 'payment', pid, `${rno} — ${money(Number(l.amount))}`); done('/bank/match', `تمت المطابقة وأُنشئ السند ${rno}`);
 }
 export async function ignoreBankLine(fd: FormData) {
-  const u = await requireUser('accountant'); const lid = s(fd, 'line_id')!, note = s(fd, 'note');
+  const u = await requireAction('accountant'); const lid = s(fd, 'line_id')!, note = s(fd, 'note');
   if (!note) back('/bank/match', 'اكتب سبب الاستبعاد (مثلاً: ليس إيجاراً)');
   await q(`update bank_lines set status='ignored', note=$1, matched_by=$2, matched_at=now() where id=$3`, [note, u.full_name, lid]);
   await log(u, 'استبعاد إيداع بنكي', 'bank_line', lid, note!); done('/bank/match', 'تم استبعاد الإيداع من المطابقة');
 }
 export async function unmatchBankLine(fd: FormData) {
-  const u = await requireUser('admin'); const lid = s(fd, 'line_id')!;
+  const u = await requireAction('admin'); const lid = s(fd, 'line_id')!;
   const [l] = await q('select * from bank_lines where id=$1', [lid]);
   await tx(async (t) => { if (l.payment_id) await t('update payments set bank_line_id=null where id=$1', [l.payment_id]); await t(`update bank_lines set status='open', payment_id=null, matched_by=null, matched_at=null where id=$1`, [lid]); });
   await log(u, 'إلغاء مطابقة إيداع', 'bank_line', lid, 'السند المنشأ يبقى؛ يُلغى من صفحته إن لزم'); done('/bank/lines', 'أُلغيت المطابقة');
@@ -203,7 +203,7 @@ async function canApprove(u: User, requester: string | null) {
   const [{ c }] = await q(`select count(*)::int c from users where role='admin' and active`); return c <= 1;
 }
 export async function decideAdjustment(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, ok = s(fd, 'decision') === 'approve';
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, ok = s(fd, 'decision') === 'approve';
   const [x] = await q('select * from adjustments where id=$1', [id]); if (!x || x.status !== 'pending') back('/approvals', 'الطلب غير موجود أو تم البت فيه');
   if (!(await canApprove(u, x.requested_by))) back('/approvals', 'لا يعتمد الطلب من طلبه');
   if (ok && !s(fd, 'decision_no') && !x.decision_no) back('/approvals', 'رقم القرار مطلوب للاعتماد');
@@ -211,7 +211,7 @@ export async function decideAdjustment(fd: FormData) {
   await log(u, ok ? 'اعتماد خصم' : 'رفض خصم', 'adjustment', id, `${x.type} ${money(Number(x.amount))}`); done('/approvals', ok ? 'اعتُمد الخصم وطُبّق على القسط' : 'رُفض الطلب');
 }
 export async function requestException(fd: FormData) {
-  const u = await requireUser('accountant'); const rule = s(fd, 'rule'), scope = s(fd, 'scope'), reason = s(fd, 'reason'), backTo = s(fd, 'back') || '/audit';
+  const u = await requireAction('accountant'); const rule = s(fd, 'rule'), scope = s(fd, 'scope'), reason = s(fd, 'reason'), backTo = s(fd, 'back') || '/audit';
   if (!rule || !scope || !reason) back(backTo, 'القاعدة والنطاق والمبرر مطلوبة');
   if (scope === 'before' && !s(fd, 'before_date')) back(backTo, 'حدد التاريخ الذي يُستثنى ما قبله');
   await q('insert into exceptions (id,rule,scope,entity_id,property_id,before_date,reason,requested_by,expires_on) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
@@ -219,20 +219,20 @@ export async function requestException(fd: FormData) {
   await log(u, 'طلب استثناء', 'exception', undefined, `${rule} — ${reason}`); done(backTo, 'أُرسل طلب الاستثناء للاعتماد');
 }
 export async function decideException(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, ok = s(fd, 'decision') === 'approve';
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, ok = s(fd, 'decision') === 'approve';
   const [x] = await q('select * from exceptions where id=$1', [id]); if (!x || x.status !== 'pending') back('/approvals', 'الطلب غير موجود');
   if (!(await canApprove(u, x.requested_by))) back('/approvals', 'لا يعتمد الطلب من طلبه');
   await q('update exceptions set status=$1, approved_by=$2 where id=$3', [ok ? 'approved' : 'rejected', u.full_name, id]);
   await log(u, ok ? 'اعتماد استثناء' : 'رفض استثناء', 'exception', id, x.rule); done('/approvals', ok ? 'اعتُمد الاستثناء' : 'رُفض الاستثناء');
 }
 export async function revokeException(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!;
   await q(`update exceptions set status='rejected' where id=$1`, [id]); await log(u, 'إلغاء استثناء', 'exception', id); done('/audit?tab=exc', 'أُلغي الاستثناء وعادت الحالات للفحص');
 }
 
 // ---------- الصيانة ----------
 export async function saveMaintenance(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), title = s(fd, 'title');
+  const u = await requireAction('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), title = s(fd, 'title');
   const path = id ? `/maintenance/${id}` : '/maintenance/new';
   if (!pid || !title) back(path, 'العقار وعنوان الطلب مطلوبان');
   const v = [pid, s(fd, 'unit_id'), title, s(fd, 'details'), s(fd, 'priority') ?? 'عادية', s(fd, 'vendor'), n(fd, 'est_cost'), s(fd, 'charge_to') ?? 'الجمعية'];
@@ -244,7 +244,7 @@ export async function saveMaintenance(fd: FormData) {
   await log(u, id ? 'تعديل طلب صيانة' : 'طلب صيانة جديد', 'maintenance', mid!, title!); done(`/maintenance/${mid}`, 'تم حفظ طلب الصيانة');
 }
 export async function setMaintStatus(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!, st = s(fd, 'status')!;
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!, st = s(fd, 'status')!;
   const [m] = await q('select * from maintenance where id=$1', [id]);
   if (st === 'done') {
     const cost = n(fd, 'cost'), d = s(fd, 'closed_on') ?? todayRiyadh();
@@ -264,7 +264,7 @@ export async function setMaintStatus(fd: FormData) {
 
 // ---------- المهام ----------
 export async function toggleTask(fd: FormData) {
-  const u = await requireUser('accountant'); const key = s(fd, 'key')!;
+  const u = await requireAction('accountant'); const key = s(fd, 'key')!;
   const [x] = await q('select status from task_states where key=$1 and (until is null or until>=current_date)', [key]);
   if (x) await q('delete from task_states where key=$1', [key]);
   else await q(`insert into task_states (key,status,until,by_user) values ($1,'done',$2,$3) on conflict (key) do update set status='done', until=excluded.until, by_user=excluded.by_user, at=now()`, [key, todayRiyadh(), u.full_name]);
@@ -272,14 +272,14 @@ export async function toggleTask(fd: FormData) {
   revalidatePath('/', 'layout'); redirect(s(fd, 'back') || '/');
 }
 export async function addTask(fd: FormData) {
-  const u = await requireUser('accountant'); const title = s(fd, 'title'); if (!title) back('/', 'عنوان المهمة مطلوب');
+  const u = await requireAction('accountant'); const title = s(fd, 'title'); if (!title) back('/', 'عنوان المهمة مطلوب');
   await q('insert into tasks (id,title,details,due,assignee,priority,created_by) values ($1,$2,$3,$4,$5,$6,$7)', [uid('tk'), title, s(fd, 'details'), s(fd, 'due'), s(fd, 'assignee'), s(fd, 'priority') ?? 'p2', u.full_name]);
   await log(u, 'مهمة يدوية', undefined, undefined, title!); done('/', 'أُضيفت المهمة');
 }
 
 // ---------- الاستعادة ----------
 export async function restoreBackup(fd: FormData) {
-  const u = await requireUser('admin'); const f = fd.get('file') as File | null;
+  const u = await requireAction('admin'); const f = fd.get('file') as File | null;
   if (s(fd, 'confirm') !== 'استعادة') back('/backups', 'اكتب كلمة «استعادة» للتأكيد');
   if (!f || !f.size) back('/backups', 'اختر ملف النسخة');
   try { await doRestore(await f!.text(), u.full_name); } catch (e: any) { back('/backups', 'فشلت الاستعادة: ' + e.message); }

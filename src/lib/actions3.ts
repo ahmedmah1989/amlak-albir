@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { addDays, addMonths } from './calc';
 import { todayRiyadh } from './data';
 import { assertOpenPeriod } from './guard';
@@ -19,7 +19,7 @@ const r2 = (x: number) => Math.round(x * 100) / 100;
 
 // ---------- صلاحيات الشاشات ----------
 export async function saveUserPerms(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, path = '/settings/users';
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, path = '/settings/users';
   const [target] = await q('select id, role, perms, full_name from users where id=$1', [id]);
   if (!target) back(path, 'المستخدم غير موجود');
   if (s(fd, 'mode') === 'reset') {
@@ -40,7 +40,7 @@ export async function saveUserPerms(fd: FormData) {
 
 // ---------- بيانات الجهة للخطابات والإشعارات ----------
 export async function saveOrgProfile(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const vat = s(fd, 'org_vat_no'); if (vat && !/^3\d{13}3$/.test(vat)) back('/settings', 'الرقم الضريبي للجهة 15 رقماً يبدأ وينتهي بـ 3');
   for (const k of ['org_vat_no', 'org_cr', 'org_address', 'org_phone', 'org_signatory'])
     await q('insert into settings values ($1,$2) on conflict (key) do update set value=excluded.value', [k, s(fd, k) ?? '']);
@@ -49,7 +49,7 @@ export async function saveOrgProfile(fd: FormData) {
 
 // ---------- اتفاق جدولة المتأخرات ----------
 export async function settleArrears(fd: FormData) {
-  const u = await requireUser('admin'); const cid = s(fd, 'contract_id')!, path = `/contracts/${cid}/settle`;
+  const u = await requireAction('admin'); const cid = s(fd, 'contract_id')!, path = `/contracts/${cid}/settle`;
   const ids = fd.getAll('inst').map(String).filter(Boolean);
   const count = n(fd, 'count'), every = n(fd, 'every'), first = s(fd, 'first_due'), decision = s(fd, 'decision_no');
   if (!ids.length) back(path, 'اختر الأقساط المشمولة بالاتفاق');
@@ -89,7 +89,7 @@ export async function settleArrears(fd: FormData) {
 
 // ---------- الإخلاء وتسليم الوحدة وتسوية التأمين ----------
 export async function vacateContract(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, path = `/contracts/${id}`;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, path = `/contracts/${id}`;
   const d = s(fd, 'vacated_on'), notes = s(fd, 'handover_notes');
   const ded = n(fd, 'deposit_deduction') ?? 0, ref = n(fd, 'deposit_refund') ?? 0;
   if (!isDate(d)) back(path, 'أدخل تاريخ الإخلاء');

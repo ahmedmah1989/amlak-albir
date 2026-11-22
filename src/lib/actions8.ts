@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { loadDB, todayRiyadh } from './data';
 import { saveFiles } from './guard';
 import { buildPlan, genSchedule, LABELS, type Plan } from './importer';
@@ -17,7 +17,7 @@ const N = (v: unknown) => normalizeSearch(String(v ?? '')).replace(/\s+/g, ' ').
 const COLS: Record<string, string> = { property: 'properties', unit: 'units', tenant: 'tenants', contract: 'contracts', installment: 'installments' };
 
 export async function uploadImport(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const f = fd.get('file'); if (!(f instanceof File) || !f.size) back('/imports', 'اختر ملف إكسل');
   if (!/\.xlsx?$/i.test((f as File).name)) back('/imports', 'الملف يجب أن يكون إكسل (.xlsx)');
   if ((f as File).size > 10 * 1024 * 1024) back('/imports', 'حجم الملف أكبر من 10 م.ب');
@@ -35,7 +35,7 @@ export async function uploadImport(fd: FormData) {
 }
 
 export async function commitImport(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!; const path = `/imports/${id}`;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!; const path = `/imports/${id}`;
   const [b] = await q('select * from import_batches where id=$1', [id]); if (!b) back('/imports', 'الدفعة غير موجودة');
   if (b.status !== 'preview') back(path, 'الدفعة معتمدة أو ملغاة من قبل');
   const plan = JSON.parse(b.payload) as Plan; const today = todayRiyadh();
@@ -107,7 +107,7 @@ export async function commitImport(fd: FormData) {
 }
 
 export async function revertImport(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!; const path = `/imports/${id}`;
+  const u = await requireAction('admin'); const id = s(fd, 'id')!; const path = `/imports/${id}`;
   const [b] = await q('select * from import_batches where id=$1', [id]); if (!b) back('/imports', 'الدفعة غير موجودة');
   if (b.status === 'preview') { await q(`update import_batches set status='discarded', reverted_by=$2, reverted_at=now() where id=$1`, [id, u.full_name]); await log(u, 'تجاهل دفعة استيراد', 'import', id, b.batch_no); done('/imports', `تم تجاهل الدفعة ${b.batch_no} دون أي تغيير`); }
   if (b.status !== 'committed') back(path, 'الدفعة ملغاة من قبل');

@@ -1,5 +1,5 @@
 'use server';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { q, tx } from './db';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -9,7 +9,7 @@ import { analyze } from './calc';
 import { buildTasks } from './tasks';
 
 export async function saveTaskWorkspace(raw: unknown) {
-  const u = await requireUser();
+  const u = await requireAction();
   if ((JSON.stringify(raw) || '').length > 24000) return { ok: false, message: 'حجم العرض المحفوظ أكبر من المسموح.' };
   const workspace = cleanTaskWorkspace(raw);
   await q(`update users set prefs=jsonb_set(coalesce(nullif(prefs,''),'{}')::jsonb,'{task_workspace}',$1::jsonb,true)::text where id=$2`, [JSON.stringify(workspace), u.id]);
@@ -18,7 +18,7 @@ export async function saveTaskWorkspace(raw: unknown) {
 }
 function validDate(v: string) { return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v + 'T12:00:00Z')) && new Date(v + 'T12:00:00Z').toISOString().slice(0, 10) === v; }
 export async function toggleWorkTask(fd: FormData) {
-  const user = await requireUser('accountant'), key = String(fd.get('key') || '');
+  const user = await requireAction('accountant'), key = String(fd.get('key') || '');
   const db = await loadDB(), task = buildTasks(db, analyze(db)).find(t => t.key === key);
   if (!task) redirect('/?err=' + encodeURIComponent('لم تعد المهمة متاحة. حدّث الصفحة.'));
   await tx(async t => {
@@ -29,7 +29,7 @@ export async function toggleWorkTask(fd: FormData) {
   revalidatePath('/', 'layout'); redirect('/');
 }
 export async function recordTaskFollowUp(fd: FormData) {
-  const user = await requireUser('accountant');
+  const user = await requireAction('accountant');
   const s = (k: string) => String(fd.get(k) || '').trim();
   const key = s('task_key'), token = s('token'), type = s('type'), details = s('details'), next = s('next_date');
   const error = (message: string): never => redirect('/?err=' + encodeURIComponent(message));

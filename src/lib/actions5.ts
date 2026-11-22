@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { todayRiyadh } from './data';
 import { assertOpenPeriod, saveFiles } from './guard';
 import { trackChanges, LABELS } from './changes';
@@ -28,7 +28,7 @@ async function syncCurrent(t: Q, pid: string) {
 }
 
 export async function addValuation(fd: FormData) {
-  const u = await requireUser('admin'); const pid = s(fd, 'property_id')!; const path = `/properties/${pid}?tab=valuation`;
+  const u = await requireAction('admin'); const pid = s(fd, 'property_id')!; const path = `/properties/${pid}?tab=valuation`;
   const kind = s(fd, 'kind') === 'initial' ? 'initial' : 'revaluation';
   const date = s(fd, 'val_date'); const land = n(fd, 'land_value'), bld = n(fd, 'building_value');
   const [p] = await q('select * from properties where id=$1', [pid]); if (!p) back('/properties', 'العقار غير موجود');
@@ -62,7 +62,7 @@ export async function addValuation(fd: FormData) {
 
 /** إلغاء آخر سجل تقييم فقط (لتصحيح خطأ إدخال) مع ذكر السبب */
 export async function deleteValuation(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason');
+  const u = await requireAction('admin'); const id = s(fd, 'id')!, reason = s(fd, 'reason');
   const [v] = await q('select * from property_valuations where id=$1', [id]); if (!v) back('/properties', 'السجل غير موجود');
   const path = `/properties/${v.property_id}?tab=valuation`;
   if (!reason) back(path, 'اكتب سبب إلغاء السجل');
@@ -82,7 +82,7 @@ export async function deleteValuation(fd: FormData) {
 }
 
 export async function saveLandBasis(fd: FormData) {
-  const u = await requireUser('admin'); const pid = s(fd, 'property_id')!; const path = `/properties/${pid}?tab=valuation`;
+  const u = await requireAction('admin'); const pid = s(fd, 'property_id')!; const path = `/properties/${pid}?tab=valuation`;
   const basis = s(fd, 'land_basis'); if (!['owned', 'leased', 'land_only'].includes(basis ?? '')) back(path, 'اختر وضع الأرض');
   const la = n(fd, 'land_area'), ba = n(fd, 'building_area');
   if ([la, ba].some((x) => Number.isNaN(x) || (x != null && x < 0))) back(path, 'تحقق من المساحات');
@@ -95,7 +95,7 @@ export async function saveLandBasis(fd: FormData) {
 
 // ---------- البيانات المؤقتة ----------
 export async function confirmPropertyData(fd: FormData) {
-  const u = await requireUser('admin'); const pid = s(fd, 'property_id')!;
+  const u = await requireAction('admin'); const pid = s(fd, 'property_id')!;
   const [p] = await q('select * from properties where id=$1', [pid]); if (!p) back('/properties', 'العقار غير موجود');
   await q(`update properties set data_status='confirmed' where id=$1`, [pid]);
   await log(u, 'اعتماد بيانات عقار', 'property', pid, `${p.name}: تحويل البيانات من «مؤقتة» إلى «معتمدة»`);
@@ -103,7 +103,7 @@ export async function confirmPropertyData(fd: FormData) {
 }
 
 export async function deleteProvisionalProperty(fd: FormData) {
-  const u = await requireUser('admin'); const pid = s(fd, 'property_id')!; const path = `/properties/${pid}`;
+  const u = await requireAction('admin'); const pid = s(fd, 'property_id')!; const path = `/properties/${pid}`;
   const [p] = await q('select * from properties where id=$1', [pid]); if (!p) back('/properties', 'العقار غير موجود');
   if (p.data_status !== 'provisional') back(path, 'يمكن حذف العقارات ذات البيانات المؤقتة فقط');
   if (s(fd, 'confirm') !== p.short) back(path, `للتأكيد اكتب اسم العقار المختصر كما هو: ${p.short}`);

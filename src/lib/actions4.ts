@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { randomBytes } from 'crypto';
 import { q, tx, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { todayRiyadh, getSettings } from './data';
 import { assertOpenPeriod, saveFiles } from './guard';
 import { FEATURES, parseFeatures, parseFeatureCfg } from './features';
@@ -25,14 +25,14 @@ async function requireFeature(key: string, path: string) {
 
 // ---------- الميزات ----------
 export async function saveFeatures(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const f = Object.fromEntries(FEATURES.map((x) => [x.key, !!fd.get('f_' + x.key)]));
   await setSetting('features', JSON.stringify(f));
   await log(u, 'تعديل الميزات', undefined, undefined, FEATURES.map((x) => `${x.label}: ${f[x.key] ? 'مفعّل' : 'مقفل'}`).join(' • '));
   done('/settings/features', 'تم حفظ الميزات');
 }
 export async function saveFeatureCfg(fd: FormData) {
-  const u = await requireUser('admin'); const path = '/settings/features';
+  const u = await requireAction('admin'); const path = '/settings/features';
   const vals: [string, number | null, number, number][] = [['late_fee_pct', n(fd, 'late_fee_pct'), 0, 10], ['late_fee_after', n(fd, 'late_fee_after'), 0, 365], ['late_fee_cap_pct', n(fd, 'late_fee_cap_pct'), 0, 100], ['elec_rate', n(fd, 'elec_rate'), 0, 100], ['water_rate', n(fd, 'water_rate'), 0, 1000]];
   for (const [k, v, lo, hi] of vals) { if (v == null || Number.isNaN(v) || v < lo || v > hi) back(path, `قيمة غير صحيحة: ${k}`); }
   for (const [k, v] of vals) await setSetting(k, String(v));
@@ -43,7 +43,7 @@ export async function saveFeatureCfg(fd: FormData) {
 
 // ---------- الوحدات الفرعية ----------
 export async function saveSubunit(fd: FormData) {
-  const u = await requireUser('accountant'); const parent = s(fd, 'parent_id')!, id = s(fd, 'id'), path = `/units/${parent}`;
+  const u = await requireAction('accountant'); const parent = s(fd, 'parent_id')!, id = s(fd, 'id'), path = `/units/${parent}`;
   await requireFeature('units_split', path);
   const [p] = await q('select property_id from units where id=$1', [parent]); if (!p) back(path, 'الوحدة الأم غير موجودة');
   const code = s(fd, 'code'); if (!code) back(path, 'رقم الوحدة الفرعية مطلوب');
@@ -58,7 +58,7 @@ export async function saveSubunit(fd: FormData) {
   await log(u, id ? 'تعديل وحدة فرعية' : 'إضافة وحدة فرعية', 'unit', parent, code!); done(path, 'تم حفظ الوحدة الفرعية');
 }
 export async function bulkSubunits(fd: FormData) {
-  const u = await requireUser('accountant'); const parent = s(fd, 'parent_id')!, path = `/units/${parent}`;
+  const u = await requireAction('accountant'); const parent = s(fd, 'parent_id')!, path = `/units/${parent}`;
   await requireFeature('units_split', path);
   const count = n(fd, 'count'), prefix = s(fd, 'prefix') ?? 'شقة', start = n(fd, 'start') ?? 1;
   if (!count || Number.isNaN(count) || count < 1 || count > 200 || !Number.isInteger(count)) back(path, 'العدد بين 1 و200');
@@ -72,7 +72,7 @@ export async function bulkSubunits(fd: FormData) {
 
 // ---------- العدادات ----------
 export async function addMeterReading(fd: FormData) {
-  const u = await requireUser('accountant'); const unit = s(fd, 'unit_id')!, path = `/units/${unit}`;
+  const u = await requireAction('accountant'); const unit = s(fd, 'unit_id')!, path = `/units/${unit}`;
   await requireFeature('meters', path);
   const kind = s(fd, 'kind'), d = s(fd, 'read_on'), reading = n(fd, 'reading');
   if (kind !== 'elec' && kind !== 'water') back(path, 'اختر نوع العداد');
@@ -89,7 +89,7 @@ export async function addMeterReading(fd: FormData) {
   done(path, cons != null ? `سُجلت القراءة؛ الاستهلاك ${money(cons)}` : 'سُجلت القراءة الأولى (بداية القياس)');
 }
 export async function chargeMeter(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!;
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!;
   const [m] = await q('select m.*, u.property_id from meter_readings m join units u on u.id=m.unit_id where m.id=$1', [id]);
   const path = `/units/${m?.unit_id ?? ''}`;
   await requireFeature('meters', path);
@@ -110,7 +110,7 @@ export async function chargeMeter(fd: FormData) {
 
 // ---------- خطة التحصيل ----------
 export async function setCollector(fd: FormData) {
-  const u = await requireUser('accountant'); const path = s(fd, 'back') || '/collection';
+  const u = await requireAction('accountant'); const path = s(fd, 'back') || '/collection';
   await requireFeature('collection_plan', path);
   const ids = fd.getAll('tenant').map(String).filter(Boolean), col = s(fd, 'collector');
   if (!ids.length) back(path, 'اختر مستأجراً واحداً على الأقل');
@@ -118,7 +118,7 @@ export async function setCollector(fd: FormData) {
   await log(u, 'تعيين موظف تحصيل', 'tenant', undefined, `${ids.length} مستأجر`); done(path, 'تم التعيين');
 }
 export async function logCall(fd: FormData) {
-  const u = await requireUser('accountant'); const tid = s(fd, 'tenant_id')!, path = s(fd, 'back') || '/collection';
+  const u = await requireAction('accountant'); const tid = s(fd, 'tenant_id')!, path = s(fd, 'back') || '/collection';
   await requireFeature('collection_plan', path);
   const res = s(fd, 'result'); if (!res) back(path, 'اختر نتيجة التواصل');
   const nd = s(fd, 'next_date'); if (nd && !isDate(nd)) back(path, 'تاريخ المتابعة غير صحيح');
@@ -130,7 +130,7 @@ export async function logCall(fd: FormData) {
 
 // ---------- غرامات التأخير ----------
 export async function issueLateFee(fd: FormData) {
-  const u = await requireUser('admin'); const iid = s(fd, 'installment_id')!, path = `/installments/${iid}`;
+  const u = await requireAction('admin'); const iid = s(fd, 'installment_id')!, path = `/installments/${iid}`;
   await requireFeature('late_fees', path);
   const decision = s(fd, 'decision_no'); if (!decision) back(path, 'رقم قرار الغرامة مطلوب');
   const { loadDB } = await import('./data'); const { analyze } = await import('./calc');
@@ -152,7 +152,7 @@ export async function issueLateFee(fd: FormData) {
 
 // ---------- الموازنة ----------
 export async function saveBudget(fd: FormData) {
-  const u = await requireUser('admin'); const year = n(fd, 'year'), path = `/reports/budget?y=${year ?? ''}`;
+  const u = await requireAction('admin'); const year = n(fd, 'year'), path = `/reports/budget?y=${year ?? ''}`;
   await requireFeature('accounting', path);
   if (!year || Number.isNaN(year) || year < 2000 || year > 2100) back('/reports/budget', 'السنة غير صحيحة');
   const props = await q('select id from properties');
@@ -166,7 +166,7 @@ export async function saveBudget(fd: FormData) {
 
 // ---------- بوابة المستأجر ----------
 export async function portalToken(fd: FormData) {
-  const u = await requireUser('accountant'); const tid = s(fd, 'tenant_id')!, path = `/tenants/${tid}`;
+  const u = await requireAction('accountant'); const tid = s(fd, 'tenant_id')!, path = `/tenants/${tid}`;
   await requireFeature('portal', path);
   const mode = s(fd, 'mode');
   const token = mode === 'revoke' ? null : randomBytes(18).toString('base64url');

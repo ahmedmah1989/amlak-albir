@@ -2,14 +2,14 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { createLink, verifyLink } from './paylinks';
 import { money } from './fmt';
 const s = (fd: FormData, k: string) => { const v = String(fd.get(k) ?? '').trim(); return v === '' ? null : v; };
 const go = (path: string, k: 'ok' | 'err', m: string): never => { revalidatePath('/', 'layout'); redirect(`${path}${path.includes('?') ? '&' : '?'}${k}=${encodeURIComponent(m)}`); };
 
 export async function createPayLink(fd: FormData) {
-  const u = await requireUser('accountant');
+  const u = await requireAction('accountant');
   const tenant = s(fd, 'tenant_id'), contract = s(fd, 'contract_id'), insts = fd.getAll('inst').map(String).filter(Boolean);
   const amount = Number(String(s(fd, 'amount') ?? '').replace(/,/g, '')), days = Number(s(fd, 'days') ?? 7);
   const back = `/paylinks/new?tenant=${tenant ?? ''}${contract ? '&contract=' + contract : ''}`;
@@ -23,17 +23,17 @@ export async function createPayLink(fd: FormData) {
   go(`/paylinks?open=${id}`, 'ok', 'أُنشئ رابط الدفع. انسخه أو أرسله بواتساب');
 }
 export async function cancelPayLink(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id');
+  const u = await requireAction('accountant'); const id = s(fd, 'id');
   await q(`update payment_links set status='cancelled' where id=$1 and status in ('pending','failed','expired')`, [id]);
   await log(u, 'إلغاء رابط دفع', 'payment_link', id ?? undefined); go('/paylinks', 'ok', 'أُلغي الرابط');
 }
 export async function recheckPayLink(fd: FormData) {
-  await requireUser('accountant'); const [l] = await q('select token from payment_links where id=$1', [s(fd, 'id')]);
+  await requireAction('accountant'); const [l] = await q('select token from payment_links where id=$1', [s(fd, 'id')]);
   const r = l ? await verifyLink(l.token) : { status: 'missing' };
   go('/paylinks', r.status === 'paid' ? 'ok' : 'err', r.status === 'paid' ? 'تم التأكد من الدفع وسُجّل السند' : 'لم يكتمل الدفع بعد عند البوابة');
 }
 export async function savePaySettings(fd: FormData) {
-  const u = await requireUser('admin');
+  const u = await requireAction('admin');
   const prov = ['moyasar', 'tap', 'sandbox'].includes(s(fd, 'pay_provider') ?? '') ? s(fd, 'pay_provider')! : '';
   const base = (s(fd, 'pay_base_url') ?? '').replace(/\/+$/, '');
   if (base && !/^https?:\/\/[^\s]+$/.test(base)) go('/paylinks?tab=settings', 'err', 'رابط البرنامج يجب أن يبدأ بـ https://');

@@ -65,6 +65,13 @@ export async function requireUser(role: Role = 'viewer'): Promise<User> {
   }
   return u;
 }
+/** إجراءات الخادم: نفس checks التفويض + منع الحسابات ذات كلمة المرور المؤقتة من تنفيذ أي عملية كتابة.
+ *  الاستثناء الوحيد changePassword (تستدعي requireUser مباشرة)؛ logout لا يتطلب جلسة مفوضة أصلاً. */
+export async function requireAction(role: Role = 'viewer'): Promise<User> {
+  const u = await requireUser(role);
+  if (u.must_change) redirect('/account?err=' + encodeURIComponent('يجب تغيير كلمة المرور المؤقتة قبل المتابعة'));
+  return u;
+}
 export function currentPath() { try { return headers().get('x-amlak-path'); } catch { return null; } }
 /** مستوى المستخدم على شاشة المسار الحالي (أو مسار محدد) */
 export function screenLevel(u: User, path: string | null = currentPath()): Level { return levelFor(u.role, parsePerms(u.perms), screenOf(path)?.key); }

@@ -2,7 +2,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { q, tx, uid } from './db';
-import { requireUser, log } from './auth';
+import { requireAction, log } from './auth';
 import { todayRiyadh } from './data';
 import { saveFiles, assertOpenPeriod } from './guard';
 import { createDuePM, obligationSchedule, INSPECTION_TEMPLATE, type InspItem } from './ops';
@@ -15,7 +15,7 @@ const files = (fd: FormData, k = 'files') => fd.getAll(k).filter((x): x is File 
 
 // ---------- الامتثال ----------
 export async function saveLicense(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), kind = s(fd, 'kind'); const back = s(fd, 'back') || '/compliance';
+  const u = await requireAction('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), kind = s(fd, 'kind'); const back = s(fd, 'back') || '/compliance';
   if (!pid || !kind) go(back, 'err', 'العقار ونوع المستند مطلوبان');
   if (!isDate(s(fd, 'issue_date')) || !isDate(s(fd, 'expiry_date'))) go(back, 'err', 'تاريخ غير صحيح');
   const v = [pid, kind, s(fd, 'number'), s(fd, 'issuer'), s(fd, 'issue_date'), s(fd, 'expiry_date'), s(fd, 'notes') ?? ''];
@@ -26,12 +26,12 @@ export async function saveLicense(fd: FormData) {
   await log(u, id ? 'تعديل مستند نظامي' : 'إضافة مستند نظامي', 'license', lid, `${kind} ${s(fd, 'expiry_date') ?? ''}`); go(back, 'ok', 'تم حفظ المستند');
 }
 export async function deleteLicense(fd: FormData) {
-  const u = await requireUser('admin'); const id = s(fd, 'id'); await q('delete from licenses where id=$1', [id]); await log(u, 'حذف مستند نظامي', 'license', id ?? undefined); go(s(fd, 'back') || '/compliance', 'ok', 'حُذف');
+  const u = await requireAction('admin'); const id = s(fd, 'id'); await q('delete from licenses where id=$1', [id]); await log(u, 'حذف مستند نظامي', 'license', id ?? undefined); go(s(fd, 'back') || '/compliance', 'ok', 'حُذف');
 }
 
 // ---------- الموردون ----------
 export async function saveVendor(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id'), name = s(fd, 'name'); if (!name) go('/vendors', 'err', 'اسم المورد مطلوب');
+  const u = await requireAction('accountant'); const id = s(fd, 'id'), name = s(fd, 'name'); if (!name) go('/vendors', 'err', 'اسم المورد مطلوب');
   const vat = s(fd, 'vat'); if (vat && !/^3\d{13}3$/.test(vat)) go('/vendors', 'err', 'الرقم الضريبي 15 رقماً يبدأ وينتهي بـ 3');
   const v = [name, s(fd, 'trade'), s(fd, 'phone'), s(fd, 'email'), s(fd, 'cr'), vat, s(fd, 'iban'), s(fd, 'contact'), n(fd, 'rating'), s(fd, 'notes') ?? '', s(fd, 'active') !== '0'];
   if (id) await q('update vendors set name=$1,trade=$2,phone=$3,email=$4,cr=$5,vat=$6,iban=$7,contact=$8,rating=$9,notes=$10,active=$11 where id=$12', [...v, id]);
@@ -41,7 +41,7 @@ export async function saveVendor(fd: FormData) {
 
 // ---------- أوامر العمل ----------
 export async function issueWorkOrder(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!; const vendor = s(fd, 'vendor_id');
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!; const vendor = s(fd, 'vendor_id');
   const [m] = await q('select * from maintenance where id=$1', [id]); if (!m) go('/maintenance', 'err', 'الطلب غير موجود');
   if (!vendor && !m.vendor_id) go(`/maintenance/${id}`, 'err', 'اختر المورد لإصدار أمر العمل');
   const [v] = await q('select name from vendors where id=$1', [vendor ?? m.vendor_id]);
@@ -52,7 +52,7 @@ export async function issueWorkOrder(fd: FormData) {
 
 // ---------- الصيانة الدورية ----------
 export async function savePmPlan(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), title = s(fd, 'title'), due = s(fd, 'next_due');
+  const u = await requireAction('accountant'); const id = s(fd, 'id'), pid = s(fd, 'property_id'), title = s(fd, 'title'), due = s(fd, 'next_due');
   if (!pid || !title || !due || !isDate(due)) go('/maintenance/plans', 'err', 'العقار والعنوان وتاريخ أول موعد مطلوبة');
   const every = Math.max(1, Math.min(60, n(fd, 'every_months') ?? 3));
   const v = [pid, s(fd, 'unit_id'), title, s(fd, 'trade'), s(fd, 'vendor_id'), every, due, n(fd, 'est_cost'), s(fd, 'active') !== '0'];
@@ -61,24 +61,24 @@ export async function savePmPlan(fd: FormData) {
   await log(u, id ? 'تعديل خطة صيانة دورية' : 'خطة صيانة دورية', 'pm', id ?? undefined, `${title} كل ${every} أشهر`); go('/maintenance/plans', 'ok', 'تم حفظ الخطة');
 }
 export async function runPmNow() {
-  const u = await requireUser('accountant'); const c = await createDuePM(u.full_name); await log(u, 'إنشاء طلبات الصيانة الدورية', undefined, undefined, String(c));
+  const u = await requireAction('accountant'); const c = await createDuePM(u.full_name); await log(u, 'إنشاء طلبات الصيانة الدورية', undefined, undefined, String(c));
   go('/maintenance/plans', 'ok', c ? `أُنشئ ${c} طلب صيانة دورية` : 'لا توجد مواعيد مستحقة خلال أسبوع');
 }
 
 // ---------- أصول الوحدة ----------
 export async function saveAsset(fd: FormData) {
-  const u = await requireUser('accountant'); const unit = s(fd, 'unit_id'), name = s(fd, 'name'); const back = `/units/${unit}?tab=assets`;
+  const u = await requireAction('accountant'); const unit = s(fd, 'unit_id'), name = s(fd, 'name'); const back = `/units/${unit}?tab=assets`;
   if (!unit || !name) go(back, 'err', 'اسم الأصل مطلوب');
   const id = s(fd, 'id'); const v = [unit, name, Math.max(1, n(fd, 'qty') ?? 1), s(fd, 'brand'), s(fd, 'serial'), s(fd, 'condition') ?? 'جيد', n(fd, 'cost'), s(fd, 'notes') ?? ''];
   if (id) await q('update unit_assets set unit_id=$1,name=$2,qty=$3,brand=$4,serial=$5,condition=$6,cost=$7,notes=$8 where id=$9', [...v, id]);
   else await q('insert into unit_assets (unit_id,name,qty,brand,serial,condition,cost,notes,id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [...v, uid('as')]);
   await log(u, 'أصل في وحدة', 'unit', unit!, name!); go(back, 'ok', 'تم الحفظ');
 }
-export async function deleteAsset(fd: FormData) { const u = await requireUser('accountant'); const unit = s(fd, 'unit_id'); await q('delete from unit_assets where id=$1', [s(fd, 'id')]); await log(u, 'حذف أصل', 'unit', unit ?? undefined); go(`/units/${unit}?tab=assets`, 'ok', 'حُذف'); }
+export async function deleteAsset(fd: FormData) { const u = await requireAction('accountant'); const unit = s(fd, 'unit_id'); await q('delete from unit_assets where id=$1', [s(fd, 'id')]); await log(u, 'حذف أصل', 'unit', unit ?? undefined); go(`/units/${unit}?tab=assets`, 'ok', 'حُذف'); }
 
 // ---------- محاضر الفحص ----------
 export async function saveInspection(fd: FormData) {
-  const u = await requireUser('accountant'); const cid = s(fd, 'contract_id'), unit = s(fd, 'unit_id'), kind = s(fd, 'kind') === 'move_out' ? 'move_out' : 'move_in', date = s(fd, 'date') ?? todayRiyadh();
+  const u = await requireAction('accountant'); const cid = s(fd, 'contract_id'), unit = s(fd, 'unit_id'), kind = s(fd, 'kind') === 'move_out' ? 'move_out' : 'move_in', date = s(fd, 'date') ?? todayRiyadh();
   if (!unit) go('/contracts', 'err', 'الوحدة غير محددة');
   const count = Number(s(fd, 'count') ?? 0); const items: InspItem[] = [];
   for (let i = 0; i < count && i < 300; i++) { const item = s(fd, `item_${i}`); if (!item) continue; items.push({ area: s(fd, `area_${i}`) ?? '', item, cond: s(fd, `cond_${i}`) ?? 'good', note: s(fd, `note_${i}`) ?? '', cost: Math.max(0, n(fd, `cost_${i}`) ?? 0) }); }
@@ -91,7 +91,7 @@ export async function saveInspection(fd: FormData) {
 
 // ---------- مستحقات المؤجرين ----------
 export async function saveObligation(fd: FormData) {
-  const u = await requireUser('accountant'); const pid = s(fd, 'property_id'), landlord = s(fd, 'landlord'), st = s(fd, 'start_date'), en = s(fd, 'end_date'), amt = n(fd, 'annual_amount');
+  const u = await requireAction('accountant'); const pid = s(fd, 'property_id'), landlord = s(fd, 'landlord'), st = s(fd, 'start_date'), en = s(fd, 'end_date'), amt = n(fd, 'annual_amount');
   if (!pid || !landlord || !st || !en || !isDate(st) || !isDate(en) || st > en || !(amt! > 0)) go('/payables', 'err', 'أكمل العقار والمؤجر والمدة والمبلغ السنوي بشكل صحيح');
   const freq = ['monthly', 'quarterly', 'semiannual', 'annual'].includes(s(fd, 'frequency') ?? '') ? s(fd, 'frequency')! : 'annual';
   const id = uid('ob');
@@ -102,7 +102,7 @@ export async function saveObligation(fd: FormData) {
   await log(u, 'التزام لمؤجر', 'obligation', id, `${landlord} • ${amt} سنوياً`); go('/payables', 'ok', 'أُضيف الالتزام وجدول مدفوعاته');
 }
 export async function payObligation(fd: FormData) {
-  const u = await requireUser('accountant'); const id = s(fd, 'id')!, d = s(fd, 'paid_on') ?? todayRiyadh(), amt = n(fd, 'amount');
+  const u = await requireAction('accountant'); const id = s(fd, 'id')!, d = s(fd, 'paid_on') ?? todayRiyadh(), amt = n(fd, 'amount');
   if (!isDate(d)) go('/payables', 'err', 'تاريخ غير صحيح');
   await assertOpenPeriod(d, '/payables');
   const [p] = await q('select p.*, o.property_id, o.landlord from obligation_payments p join lease_obligations o on o.id=p.obligation_id where p.id=$1', [id]);
