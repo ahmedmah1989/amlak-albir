@@ -1,0 +1,83 @@
+name: windows-desktop-smoke
+# DRAFT v2 for review — proves the original Windows desktop mode on a real Windows runner.
+# Gates honored: workflow_dispatch only (no automatic runs), synthetic data only
+# (repo seed.json is demo data; no original tenant archive), no secrets, no DATABASE_URL
+# (desktop PGlite branch), artifacts contain logs only (no env, no cookies, no data dir).
+# Scope honesty: proves Windows backend runtime + real .bat launcher behavior.
+# Interactive login UI is a Next server action (no plain HTTP route) — NOT covered by v1;
+# a Playwright follow-up would be needed for full UI closure on Windows.
+on:
+  workflow_dispatch:
+
+jobs:
+  desktop-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Boot desktop mode (no DATABASE_URL -> PGlite at ./data/db)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force logs | Out-Null
+          $p = Start-Process -PassThru npm -ArgumentList 'start' -RedirectStandardOutput logs/server.out -RedirectStandardError logs/server.err -WindowStyle Hidden
+          "SERVER_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-WebRequest -Uri 'http://localhost:3000/login' -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200 -and $r.Content -match 'dir="rtl"') { $ok = $true; break }
+            } catch {}
+          }
+          if (-not $ok) { Get-Content logs/server.err -Tail 60; throw 'server did not boot' }
+          Write-Host 'BOOT_OK'
+
+      - name: PGlite data dir initialized
+        run: |
+          if (-not (Test-Path 'data/db/PG_VERSION')) { throw 'pglite dir missing' }
+          Get-ChildItem data/db | Select-Object -First 8 Name
+
+      - name: Auth guard redirects when signed out
+        run: |
+          $r = Invoke-WebRequest -Uri 'http://localhost:3000/' -UseBasicParsing -MaximumRedirection 0 -SkipHttpErrorCheck
+          if ($r.StatusCode -notin 301,302,303,307,308) { throw "expected redirect, got $($r.StatusCode)" }
+          Write-Host "GUARD_OK -> $($r.Headers.Location)"
+
+      - name: Launcher proof — run the actual start.bat (bounded wait)
+        shell: cmd
+        run: |
+          taskkill /F /IM node.exe 2>nul
+          setlocal enabledelayedexpansion
+          start /min "" cmd /c "start.bat > logs\bat.out 2>&1"
+          set ok=0
+          for /l %%i in (1,1,40) do (
+            timeout /t 3 /nobreak >nul
+            for /f %%c in ('curl -s -o nul -w "%%{http_code}" http://localhost:3000/login') do if "%%c"=="200" set ok=1
+            if !ok!==1 goto done
+          )
+          :done
+          if "%ok%"=="1" (echo BAT_BOOT_OK) else (type logs\bat.out & exit /b 1)
+
+      - name: Cleanup
+        if: always()
+        run: taskkill /F /IM node.exe 2>$null; exit 0
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-logs
+          path: logs/
+          retention-days: 7
