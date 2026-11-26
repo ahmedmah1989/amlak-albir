@@ -88,6 +88,12 @@ jobs:
           if errorlevel 1 (type logs\update.out & exit /b 1)
           echo UPDATE_REBUILD_OK
 
+      - name: Reinstall Playwright (update.bat npm install prunes --no-save packages)
+        shell: pwsh
+        run: |
+          npm i --no-save playwright
+          npx playwright install chromium
+
       - name: UI proof phase 3 — tenant survives update.bat rebuild
         shell: pwsh
         run: |
