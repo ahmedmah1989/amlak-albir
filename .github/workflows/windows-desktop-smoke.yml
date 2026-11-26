@@ -48,9 +48,10 @@ jobs:
           if (-not (Test-Path 'data/db/PG_VERSION')) { throw 'pglite dir missing' }
           Get-ChildItem data/db | Select-Object -First 8 Name
           Write-Host 'PGLITE_OK'
-          $g = Invoke-WebRequest -Uri 'http://localhost:3000/' -UseBasicParsing -MaximumRedirection 0 -SkipHttpErrorCheck
-          if ($g.StatusCode -notin 301,302,303,307,308) { throw "expected redirect, got $($g.StatusCode)" }
-          Write-Host "GUARD_OK -> $($g.Headers.Location)"
+          $code = curl.exe -s -o nul -w '%{http_code}' http://localhost:3000/
+          $loc = curl.exe -s -o nul -w '%{redirect_url}' http://localhost:3000/
+          if ($code -notin '301','302','303','307','308') { throw "expected redirect, got $code" }
+          Write-Host "GUARD_OK -> $code $loc"
           taskkill /F /IM node.exe 2>$null | Out-Null
 
       - name: Launcher proof — run the actual start.bat (bounded wait)
