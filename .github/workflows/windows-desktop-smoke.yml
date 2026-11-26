@@ -30,12 +30,11 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Boot desktop mode (no DATABASE_URL -> PGlite at ./data/db)
+      - name: Boot desktop mode + verify (no DATABASE_URL -> PGlite at ./data/db)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force logs | Out-Null
           $p = Start-Process -PassThru cmd.exe -ArgumentList '/c npm start' -RedirectStandardOutput logs/server.out -RedirectStandardError logs/server.err -WindowStyle Hidden
-          "SERVER_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
           $ok = $false
           for ($i = 0; $i -lt 60; $i++) {
             Start-Sleep -Seconds 2
@@ -44,19 +43,15 @@ jobs:
               if ($r.StatusCode -eq 200 -and $r.Content -match 'dir="rtl"') { $ok = $true; break }
             } catch {}
           }
-          if (-not $ok) { Get-Content logs/server.err -Tail 60; throw 'server did not boot' }
+          if (-not $ok) { Get-Content logs/server.err -Tail 60; Get-Content logs/server.out -Tail 60; throw 'server did not boot' }
           Write-Host 'BOOT_OK'
-
-      - name: PGlite data dir initialized
-        run: |
           if (-not (Test-Path 'data/db/PG_VERSION')) { throw 'pglite dir missing' }
           Get-ChildItem data/db | Select-Object -First 8 Name
-
-      - name: Auth guard redirects when signed out
-        run: |
-          $r = Invoke-WebRequest -Uri 'http://localhost:3000/' -UseBasicParsing -MaximumRedirection 0 -SkipHttpErrorCheck
-          if ($r.StatusCode -notin 301,302,303,307,308) { throw "expected redirect, got $($r.StatusCode)" }
-          Write-Host "GUARD_OK -> $($r.Headers.Location)"
+          Write-Host 'PGLITE_OK'
+          $g = Invoke-WebRequest -Uri 'http://localhost:3000/' -UseBasicParsing -MaximumRedirection 0 -SkipHttpErrorCheck
+          if ($g.StatusCode -notin 301,302,303,307,308) { throw "expected redirect, got $($g.StatusCode)" }
+          Write-Host "GUARD_OK -> $($g.Headers.Location)"
+          taskkill /F /IM node.exe 2>$null | Out-Null
 
       - name: Launcher proof — run the actual start.bat (bounded wait)
         shell: cmd
