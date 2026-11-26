@@ -79,7 +79,7 @@ export default async function Notifications({ searchParams }: { searchParams: { 
   } else {
     const isLog = tab === 'log', st = searchParams.st ?? '';
     const where = isLog ? (st ? `status=$1` : `status in ('sent','skipped','cancelled')`) : `status in ('pending','manual','failed','approved')`;
-    const rows = await q(`select n.*, t.notify_opt_out from notify_queue n left join tenants t on t.id=n.tenant_id where ${where} and n.channel<>'internal' order by n.created_at desc limit 400`, isLog && st ? [st] : []);
+    const rows = await q(`select n.*, t.notify_opt_out from notify_queue n left join tenants t on t.id=n.tenant_id where ${where} order by n.created_at desc limit 400`, isLog && st ? [st] : []);
     body = <>
       {!isLog && <div className="kpis"><Kpi tone={counts.pending ? 'warn' : ''} l="بانتظار المراجعة" v={String(counts.pending)} /><Kpi tone="info" l="واتساب جاهز للإرسال اليدوي" v={String(counts.manual)} /><Kpi tone={counts.failed ? 'bad' : ''} l="فشل الإرسال" v={String(counts.failed)} /><Kpi l="أُرسل خلال 30 يوماً" v={String(counts.sent30)} s={counts.skipped30 ? `${counts.skipped30} لم تُرسل لنقص البيانات` : undefined} /></div>}
       {isLog && <div className="chips noprint">{[['', 'الكل'], ['sent', 'أُرسل'], ['skipped', 'لم يُرسل'], ['cancelled', 'أُلغي']].map(([k, l]) => <a key={k} href={`/notifications?tab=log${k ? '&st=' + k : ''}`} className={st === k ? 'on' : ''}>{l}</a>)}</div>}

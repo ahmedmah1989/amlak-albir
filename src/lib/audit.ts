@@ -1,6 +1,7 @@
 import type { DB, Exception } from './types';
 import type { Analysis } from './calc';
 import { daysBetween } from './calc';
+import { ejarPaidState } from './ejar';
 
 export interface Rule { id: string; title: string; level: 'high' | 'mid' | 'low'; entity: string; fix: string }
 export const RULES: Rule[] = [
@@ -76,7 +77,7 @@ export function runAudit(db: DB, a: Analysis) {
   const ejarNos = new Set(db.ejar.filter((e) => !e.contract_id).map((e) => e.contract_no));
   for (const no of ejarNos) out.push({ rule: 'ejar_unlinked', entity: 'ejar', entity_id: no, property_id: null, title: `عقد إيجار ${no}`, sub: db.ejar.find((e) => e.contract_no === no)?.broker ?? '', href: `/ejar?c=${no}`, date: null, amount: null });
   for (const e of db.ejar) {
-    if (e.status !== 'تم الدفع' || !e.installment_id) continue;
+    if (ejarPaidState(e.status) !== 'paid' || !e.installment_id) continue;
     const r = a.rows.find((x) => x.id === e.installment_id);
     if (r && r.balance > 0) out.push({ rule: 'ejar_paid_open', entity: 'installment', entity_id: r.id, property_id: r.contract.property_id, title: `${r.tenantName} — قسط ${r.no}`, sub: `فاتورة إيجار ${e.installment_no}`, href: `/installments/${r.id}`, date: r.due_date, amount: r.balance });
   }

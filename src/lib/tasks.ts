@@ -1,7 +1,7 @@
 import type { DB } from './types';
 import type { Analysis } from './calc';
 import { daysBetween, addMonths } from './calc';
-import { runAudit } from './audit';
+import { runAudit, RULES } from './audit';
 import { expiringDocs, missingDocs } from './docs';
 import { parseFeatureCfg } from './features';
 
@@ -52,7 +52,7 @@ export function buildTasks(db: DB, a: Analysis): GTask[] {
     contract_expired_active: ['عقود انتهت مدتها دون إجراء', 'تجديد', 'p1'], contract_no_ejar: ['عقود بلا رقم إيجار', 'بيانات', 'p3'], contract_no_copy: ['عقود بلا نسخة مرفقة', 'توثيق', 'p3'], dup_contract_no: ['أرقام عقود مكررة', 'بيانات', 'p2'],
     tenant_no_phone: ['مستأجرون بلا جوال', 'بيانات', 'p3'], tenant_no_id: ['مستأجرون بلا هوية أو سجل', 'بيانات', 'p3'], property_no_deed: ['عقارات بلا رقم صك', 'بيانات', 'p3'], property_no_value: ['عقارات بلا قيمة دفترية', 'بيانات', 'p3'],
     doc_expired: ['مستندات منتهية', 'توثيق', 'p2'], ejar_unlinked: ['عقود إيجار غير مربوطة', 'إيجار', 'p2'], ejar_paid_open: ['مدفوع في إيجار وغير مسدد في النظام', 'إيجار', 'p1'] };
-  for (const [rule, n] of groups) { const [t, ty, p] = TITLE[rule] ?? [rule, 'بيانات', 'p3'];
+  for (const [rule, n] of groups) { const m = TITLE[rule]; const t = m?.[0] ?? RULES.find((x) => x.id === rule)?.title ?? 'قاعدة غير معروفة'; const ty = m?.[1] ?? 'بيانات'; const p = m?.[2] ?? 'p3';
     T.push({ key: `aud:${rule}`, type: ty, p, prop: 'عام', title: `${n} — ${t}`, desc: 'من فحص جودة البيانات. يمكن استثناء الحالات المبررة بطلب معتمد.', amount: audit.open.filter((f) => f.rule === rule).reduce((x, f) => x + (f.amount ?? 0), 0), due: today, href: `/audit?r=${rule}`, act: 'عرض الحالات', who: 'المحاسب' }); }
   if (a.unconfirmed.length) T.push({ key: 'aud:unconfirmed', type: 'مطابقة', p: 'p2', prop: 'عام', title: `${a.unconfirmed.length} أقساط تحتاج تأكيداً`, desc: 'مطابقتها مع كشف البنك وتأكيد سدادها أو عدمه.', amount: a.pendingTotal, due: today, href: '/reports/unconfirmed', act: 'فتح الكشف', who: 'المحاسب' });
   for (const m of db.tasks) T.push({ key: `man:${m.id}`, type: 'يدوية', p: (m.priority as 'p1') || 'p2', prop: 'عام', title: m.title, desc: m.details ?? '', amount: 0, due: m.due, href: '/', act: m.due ? 'موعدها ' + m.due.split('-').reverse().join('/') : 'مهمة يدوية', who: m.assignee ?? '' });
