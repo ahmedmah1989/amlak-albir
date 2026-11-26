@@ -52,7 +52,7 @@ if (phase === 'phase1') {
   await page.waitForURL((u) => !u.toString().includes('/login'), { timeout: 20000 });
   if (page.url().includes('/account')) {
     await shot('02-must-change');
-    const pwForm = page.locator('form:has(input[name="current"])');
+    const pwForm = page.locator('form:has(input[name="new"])');
     await pwForm.locator('input[name="current"]').fill(DEFAULT_PASS);
     await pwForm.locator('input[name="new"]').fill(NEW_PASS);
     await pwForm.locator('input[name="confirm"]').fill(NEW_PASS);
