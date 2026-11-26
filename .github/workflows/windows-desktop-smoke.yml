@@ -8,6 +8,9 @@ name: windows-desktop-smoke
 # a Playwright follow-up would be needed for full UI closure on Windows.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ci/windows-desktop-smoke
 
 jobs:
   desktop-smoke:
