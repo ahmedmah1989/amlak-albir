@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force logs | Out-Null
-          $p = Start-Process -PassThru npm -ArgumentList 'start' -RedirectStandardOutput logs/server.out -RedirectStandardError logs/server.err -WindowStyle Hidden
+          $p = Start-Process -PassThru cmd.exe -ArgumentList '/c npm start' -RedirectStandardOutput logs/server.out -RedirectStandardError logs/server.err -WindowStyle Hidden
           "SERVER_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
           $ok = $false
           for ($i = 0; $i -lt 60; $i++) {
