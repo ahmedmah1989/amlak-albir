@@ -1,11 +1,5 @@
 name: windows-desktop-smoke
-# DRAFT v2 for review — proves the original Windows desktop mode on a real Windows runner.
-# Gates honored: workflow_dispatch only (no automatic runs), synthetic data only
-# (repo seed.json is demo data; no original tenant archive), no secrets, no DATABASE_URL
-# (desktop PGlite branch), artifacts contain logs only (no env, no cookies, no data dir).
-# Scope honesty: proves Windows backend runtime + real .bat launcher behavior.
-# Interactive login UI is a Next server action (no plain HTTP route) — NOT covered by v1;
-# a Playwright follow-up would be needed for full UI closure on Windows.
+
 on:
   workflow_dispatch:
   push:
@@ -15,7 +9,7 @@ on:
 jobs:
   desktop-smoke:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -24,59 +18,102 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install
-        run: npm ci --no-audit --no-fund
+      - name: Prepare CI credentials (runtime-generated, masked)
+        shell: pwsh
+        run: |
+          $np = 'Ci!' + (-join ((48..57) + (65..90) + (97..122) | Get-Random -Count 12 | ForEach-Object { [char]$_ }))
+          "CI_NEWPASS=$np" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "DEFAULT_PASS=admin123" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "::add-mask::$np"
+          "::add-mask::admin123"
 
-      - name: Build
-        run: npm run build
-
-      - name: Boot desktop mode + verify (no DATABASE_URL -> PGlite at ./data/db)
+      - name: First-launch proof — fresh tree via the real start.bat
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force logs | Out-Null
-          $p = Start-Process -PassThru cmd.exe -ArgumentList '/c npm start' -RedirectStandardOutput logs/server.out -RedirectStandardError logs/server.err -WindowStyle Hidden
+          if ((Test-Path node_modules) -or (Test-Path .next)) { throw 'tree not fresh' }
+          Write-Host 'FIRST_RUN_CLEAN'
+          Start-Process cmd.exe -ArgumentList '/c start.bat > logs\first-launch.out 2>&1' -WindowStyle Hidden
           $ok = $false
-          for ($i = 0; $i -lt 60; $i++) {
-            Start-Sleep -Seconds 2
+          for ($i = 0; $i -lt 150; $i++) {
+            Start-Sleep -Seconds 5
             try {
               $r = Invoke-WebRequest -Uri 'http://localhost:3000/login' -UseBasicParsing -TimeoutSec 5
               if ($r.StatusCode -eq 200 -and $r.Content -match 'dir="rtl"') { $ok = $true; break }
             } catch {}
           }
-          if (-not $ok) { Get-Content logs/server.err -Tail 60; Get-Content logs/server.out -Tail 60; throw 'server did not boot' }
-          Write-Host 'BOOT_OK'
-          if (-not (Test-Path 'data/db/PG_VERSION')) { throw 'pglite dir missing' }
-          Get-ChildItem data/db | Select-Object -First 8 Name
-          Write-Host 'PGLITE_OK'
-          $code = curl.exe -s -o nul -w '%{http_code}' http://localhost:3000/
-          $loc = curl.exe -s -o nul -w '%{redirect_url}' http://localhost:3000/
-          if ($code -notin '301','302','303','307','308') { throw "expected redirect, got $code" }
-          Write-Host "GUARD_OK -> $code $loc"
+          if (-not $ok) { Get-Content logs/first-launch.out -Tail 80; throw 'first launch did not boot' }
+          Write-Host 'FIRST_LAUNCH_OK'
           taskkill /F /IM node.exe 2>$null | Out-Null
 
-      - name: Launcher proof — run the actual start.bat (bounded wait)
+      - name: Install Playwright chromium
+        shell: pwsh
+        run: |
+          npm i --no-save playwright
+          npx playwright install chromium
+
+      - name: UI proof phase 1 — login, forced password change, create tenant (real Chromium)
+        shell: pwsh
+        run: |
+          Start-Process cmd.exe -ArgumentList '/c npm start > logs\ui-server-1.out 2>&1' -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-WebRequest -Uri 'http://localhost:3000/login' -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          if (-not $ok) { Get-Content logs/ui-server-1.out -Tail 60; throw 'server did not boot for phase1' }
+          node .github/ci/ui-proof.mjs phase1
+          taskkill /F /IM node.exe 2>$null | Out-Null
+
+      - name: UI proof phase 2 — restart persistence (data + session)
+        shell: pwsh
+        run: |
+          Start-Process cmd.exe -ArgumentList '/c npm start > logs\ui-server-2.out 2>&1' -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-WebRequest -Uri 'http://localhost:3000/login' -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          if (-not $ok) { Get-Content logs/ui-server-2.out -Tail 60; throw 'server did not boot for phase2' }
+          node .github/ci/ui-proof.mjs phase2
+          taskkill /F /IM node.exe 2>$null | Out-Null
+
+      - name: update.bat branch — rebuild keeps data and backups
         shell: cmd
         run: |
           taskkill /F /IM node.exe 2>nul
-          setlocal enabledelayedexpansion
-          start /min "" cmd /c "start.bat > logs\bat.out 2>&1"
-          set ok=0
-          for /l %%i in (1,1,40) do (
-            timeout /t 3 /nobreak >nul
-            for /f %%c in ('curl -s -o nul -w "%%{http_code}" http://localhost:3000/login') do if "%%c"=="200" set ok=1
-            if !ok!==1 goto done
-          )
-          :done
-          if "%ok%"=="1" (echo BAT_BOOT_OK) else (type logs\bat.out & exit /b 1)
+          cmd /c "update.bat < nul > logs\update.out 2>&1"
+          if errorlevel 1 (type logs\update.out & exit /b 1)
+          echo UPDATE_REBUILD_OK
+
+      - name: UI proof phase 3 — tenant survives update.bat rebuild
+        shell: pwsh
+        run: |
+          Start-Process cmd.exe -ArgumentList '/c npm start > logs\ui-server-3.out 2>&1' -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-WebRequest -Uri 'http://localhost:3000/login' -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          if (-not $ok) { Get-Content logs/ui-server-3.out -Tail 60; throw 'server did not boot for phase3' }
+          node .github/ci/ui-proof.mjs phase3
+          Write-Host 'UPDATE_OK'
+          taskkill /F /IM node.exe 2>$null | Out-Null
 
       - name: Cleanup
         if: always()
-        run: taskkill /F /IM node.exe 2>$null; exit 0
+        shell: pwsh
+        run: |
+          taskkill /F /IM node.exe 2>$null | Out-Null
+          if (Test-Path state) { Remove-Item -Recurse -Force state }
+          exit 0
 
-      - name: Upload logs
+      - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-smoke-logs
-          path: logs/
+          name: windows-ui-proof
+          path: |
+            shots/
+            logs/
           retention-days: 7
